@@ -108,14 +108,12 @@ Answer the user's request using relevant tools (if they are available). Before c
 def count_tokens(text):
     return len(tokenizer.encode(text))
 
-def update_token_usage(input_tokens, output_tokens, total_tokens, system_tokens, history_tokens):
+def update_token_usage(input_tokens, output_tokens, total_tokens):
     global token_usage
     token_usage["total_tokens"] += total_tokens
     token_usage["conversation_tokens"].append({
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
-        "system_tokens": system_tokens,
-        "history_tokens": history_tokens,
         "total_tokens": total_tokens
     })
 
@@ -320,26 +318,8 @@ def execute_goals(goals):
             print_colored("Exiting automode.", TOOL_COLOR)
             break
 
-def chat_with_claude(user_input, image_path=None, current_iteration=None, max_iterations=None):
+def chat_with_claude(user_input, image_path=None):
     global conversation_history, automode
-    
-    # Count input tokens
-    input_tokens = count_tokens(user_input)
-    
-    # Update system prompt
-    current_system_prompt = update_system_prompt(current_iteration, max_iterations)
-    
-    # Check if we need to add or update the system message
-    if not conversation_history or conversation_history[0]['role'] != 'system':
-        conversation_history.insert(0, {"role": "system", "content": current_system_prompt})
-    else:
-        conversation_history[0]['content'] = current_system_prompt
-    
-    # Count system prompt tokens
-    system_prompt_tokens = count_tokens(current_system_prompt)
-    
-    # Count conversation history tokens
-    history_tokens = sum(count_tokens(str(msg.get('content', ''))) for msg in conversation_history[1:])
     
     if image_path:
         print_colored(f"Processing image at path: {image_path}", TOOL_COLOR)
@@ -347,7 +327,6 @@ def chat_with_claude(user_input, image_path=None, current_iteration=None, max_it
         
         if image_base64.startswith("Error"):
             print_colored(f"Error encoding image: {image_base64}", TOOL_COLOR)
-            update_token_usage(input_tokens, 0, input_tokens, system_prompt_tokens, history_tokens)
             return "I'm sorry, there was an error processing the image. Please try again.", False
 
         image_message = {
@@ -372,29 +351,20 @@ def chat_with_claude(user_input, image_path=None, current_iteration=None, max_it
     else:
         conversation_history.append({"role": "user", "content": user_input})
     
-    messages = conversation_history.copy()
+    messages = [msg for msg in conversation_history if msg.get('content')]
     
     try:
         response = client.messages.create(
             model="claude-3-5-sonnet-20240620",
             max_tokens=4000,
+            system=update_system_prompt(),
             messages=messages,
             tools=tools,
             tool_choice={"type": "auto"}
         )
-        
-        # Extract token usage from the response
-        output_tokens = response.usage.output_tokens
-        
     except Exception as e:
         print_colored(f"Error calling Claude API: {str(e)}", TOOL_COLOR)
-        total_tokens = input_tokens + system_prompt_tokens + history_tokens
-        update_token_usage(input_tokens, 0, total_tokens, system_prompt_tokens, history_tokens)
         return "I'm sorry, there was an error communicating with the AI. Please try again.", False
-    
-    # Calculate total tokens and update token usage
-    total_tokens = input_tokens + output_tokens + system_prompt_tokens + history_tokens
-    update_token_usage(input_tokens, output_tokens, total_tokens, system_prompt_tokens, history_tokens)
     
     assistant_response = ""
     exit_continuation = False
@@ -432,6 +402,7 @@ def chat_with_claude(user_input, image_path=None, current_iteration=None, max_it
                 tool_response = client.messages.create(
                     model="claude-3-5-sonnet-20240620",
                     max_tokens=4000,
+                    system=update_system_prompt(),
                     messages=[msg for msg in conversation_history if msg.get('content')],
                     tools=tools,
                     tool_choice={"type": "auto"}
@@ -441,22 +412,12 @@ def chat_with_claude(user_input, image_path=None, current_iteration=None, max_it
                     if tool_content_block.type == "text":
                         assistant_response += tool_content_block.text
                         print_colored(f"\nClaude: {tool_content_block.text}", CLAUDE_COLOR)
-                
-                # Update token usage for tool response
-                tool_input_tokens = count_tokens(result)
-                tool_output_tokens = tool_response.usage.output_tokens
-                tool_total_tokens = tool_input_tokens + tool_output_tokens + system_prompt_tokens + history_tokens
-                update_token_usage(tool_input_tokens, tool_output_tokens, tool_total_tokens, system_prompt_tokens, history_tokens)
-                
             except Exception as e:
                 print_colored(f"Error in tool response: {str(e)}", TOOL_COLOR)
                 assistant_response += "\nI encountered an error while processing the tool result. Please try again."
     
     if assistant_response:
-        conversation_history.append({
-            "role": "assistant", 
-            "content": assistant_response,
-        })
+        conversation_history.append({"role": "assistant", "content": assistant_response})
     
     return assistant_response, exit_continuation
 
@@ -486,17 +447,10 @@ def process_and_display_response(response):
 def chat_with_claude(user_input, image_path=None, current_iteration=None, max_iterations=None):
     global conversation_history, automode
     
-    # Count input tokens
+    # Count input, system, conversation history tokens
     input_tokens = count_tokens(user_input)
-    
-    # Update system prompt
-    current_system_prompt = update_system_prompt(current_iteration, max_iterations)
-    
-    # Count system prompt tokens
-    system_prompt_tokens = count_tokens(current_system_prompt)
-    
-    # Prepare messages, excluding any previous system messages
-    messages = [msg for msg in conversation_history if msg['role'] != 'system']
+    system_prompt_tokens = count_tokens(update_system_prompt(current_iteration, max_iterations))
+    history_tokens = sum(count_tokens(str(msg.get('content', ''))) for msg in conversation_history)
     
     if image_path:
         print_colored(f"Processing image at path: {image_path}", TOOL_COLOR)
@@ -504,7 +458,7 @@ def chat_with_claude(user_input, image_path=None, current_iteration=None, max_it
         
         if image_base64.startswith("Error"):
             print_colored(f"Error encoding image: {image_base64}", TOOL_COLOR)
-            update_token_usage(input_tokens, 0, input_tokens, system_prompt_tokens, 0)
+            update_token_usage(input_tokens, 0, input_tokens + system_prompt_tokens + history_tokens)
             return "I'm sorry, there was an error processing the image. Please try again.", False
 
         image_message = {
@@ -524,19 +478,18 @@ def chat_with_claude(user_input, image_path=None, current_iteration=None, max_it
                 }
             ]
         }
-        messages.append(image_message)
-        print_colored("Image message added to messages", TOOL_COLOR)
+        conversation_history.append(image_message)
+        print_colored("Image message added to conversation history", TOOL_COLOR)
     else:
-        messages.append({"role": "user", "content": user_input})
+        conversation_history.append({"role": "user", "content": user_input})
     
-    # Count conversation history tokens (excluding system prompt)
-    history_tokens = sum(count_tokens(str(msg.get('content', ''))) for msg in messages)
+    messages = [msg for msg in conversation_history if msg.get('content')]
     
     try:
         response = client.messages.create(
             model="claude-3-5-sonnet-20240620",
             max_tokens=4000,
-            system=current_system_prompt,
+            system=update_system_prompt(current_iteration, max_iterations),
             messages=messages,
             tools=tools,
             tool_choice={"type": "auto"}
@@ -548,12 +501,12 @@ def chat_with_claude(user_input, image_path=None, current_iteration=None, max_it
     except Exception as e:
         print_colored(f"Error calling Claude API: {str(e)}", TOOL_COLOR)
         total_tokens = input_tokens + system_prompt_tokens + history_tokens
-        update_token_usage(input_tokens, 0, total_tokens, system_prompt_tokens, history_tokens)
+        update_token_usage(input_tokens, 0, total_tokens)
         return "I'm sorry, there was an error communicating with the AI. Please try again.", False
     
     # Calculate total tokens and update token usage
     total_tokens = input_tokens + output_tokens + system_prompt_tokens + history_tokens
-    update_token_usage(input_tokens, output_tokens, total_tokens, system_prompt_tokens, history_tokens)
+    update_token_usage(input_tokens, output_tokens, total_tokens)
     
     assistant_response = ""
     exit_continuation = False
@@ -575,8 +528,8 @@ def chat_with_claude(user_input, image_path=None, current_iteration=None, max_it
             result = execute_tool(tool_name, tool_input)
             print_colored(f"Tool Result: {result}", RESULT_COLOR)
             
-            messages.append({"role": "assistant", "content": [content_block]})
-            messages.append({
+            conversation_history.append({"role": "assistant", "content": [content_block]})
+            conversation_history.append({
                 "role": "user",
                 "content": [
                     {
@@ -591,8 +544,8 @@ def chat_with_claude(user_input, image_path=None, current_iteration=None, max_it
                 tool_response = client.messages.create(
                     model="claude-3-5-sonnet-20240620",
                     max_tokens=4000,
-                    system=current_system_prompt,
-                    messages=messages,
+                    system=update_system_prompt(current_iteration, max_iterations),
+                    messages=[msg for msg in conversation_history if msg.get('content')],
                     tools=tools,
                     tool_choice={"type": "auto"}
                 )
@@ -606,93 +559,51 @@ def chat_with_claude(user_input, image_path=None, current_iteration=None, max_it
                 tool_input_tokens = count_tokens(result)
                 tool_output_tokens = tool_response.usage.output_tokens
                 tool_total_tokens = tool_input_tokens + tool_output_tokens + system_prompt_tokens + history_tokens
-                update_token_usage(tool_input_tokens, tool_output_tokens, tool_total_tokens, system_prompt_tokens, history_tokens)
+                update_token_usage(tool_input_tokens, tool_output_tokens, tool_total_tokens)
                 
             except Exception as e:
                 print_colored(f"Error in tool response: {str(e)}", TOOL_COLOR)
                 assistant_response += "\nI encountered an error while processing the tool result. Please try again."
     
     if assistant_response:
-        messages.append({
+        conversation_history.append({
             "role": "assistant", 
             "content": assistant_response,
         })
-    
-    # Update the global conversation_history
-    conversation_history = messages
     
     return assistant_response, exit_continuation
 
 def get_token_usage():
     global token_usage
-    total_tokens = token_usage["total_tokens"]
-    conversation_tokens = token_usage["conversation_tokens"]
-    
-    if conversation_tokens:
-        last_message = conversation_tokens[-1]
-        average_tokens = total_tokens / len(conversation_tokens)
-    else:
-        last_message = {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "system_tokens": 0,
-            "history_tokens": 0,
-            "total_tokens": 0
-        }
-        average_tokens = 0
-
     return {
-        "total_tokens": total_tokens,
-        "average_tokens_per_message": average_tokens,
-        "last_message": last_message,
-        "conversation_tokens": conversation_tokens
+        "total_tokens": token_usage["total_tokens"],
+        "conversation_tokens": token_usage["conversation_tokens"],
+        "average_tokens_per_message": token_usage["total_tokens"] / len(token_usage["conversation_tokens"]) if token_usage["conversation_tokens"] else 0
     }
-
-def display_token_usage(usage, is_summary=False):
-    if is_summary:
-        print_colored("\nToken Usage Summary:", TOOL_COLOR)
-    else:
-        print_colored("\nTokens used in this interaction:", TOOL_COLOR)
-    
-    last_message = usage['last_message']
-    print_colored(f"  Input:   {last_message['input_tokens']:>6}", TOOL_COLOR)
-    print_colored(f"  Output:  {last_message['output_tokens']:>6}", TOOL_COLOR)
-    print_colored(f"  System:  {last_message['system_tokens']:>6}", TOOL_COLOR)
-    print_colored(f"  History: {last_message['history_tokens']:>6}", TOOL_COLOR)
-    print_colored(f"  Total:   {last_message['total_tokens']:>6}", TOOL_COLOR)
-    
-    if is_summary:
-        print_colored(f"Cumulative tokens used: {usage['total_tokens']}", TOOL_COLOR)
-        print_colored(f"Average Tokens per Message: {usage['average_tokens_per_message']:.2f}", TOOL_COLOR)
 
 def main():
     global automode, conversation_history
     print_colored("Welcome to the Claude-3.5-Sonnet Engineer Chat with Image Support!", CLAUDE_COLOR)
     print_colored("Type 'exit' to end the conversation.", CLAUDE_COLOR)
     print_colored("Type 'image' to include an image in your message.", CLAUDE_COLOR)
-    print_colored("Type 'automode [number]' to enter Autonomous mode with a specific number of iterations.", CLAUDE_COLOR)
     print_colored("Type 'token' to see the token usage summary.", CLAUDE_COLOR)
+    print_colored("Type 'automode [number]' to enter Autonomous mode with a specific number of iterations.", CLAUDE_COLOR)
     print_colored("While in automode, press Ctrl+C at any time to exit the automode to return to regular chat.", CLAUDE_COLOR)
     
     while True:
         user_input = input(f"\n{USER_COLOR}You: {Style.RESET_ALL}")
         
         if user_input.lower() == 'exit':
-            usage = get_token_usage()
-            if usage['conversation_tokens']:
-                display_token_usage(usage['conversation_tokens'][-1])
-            print_colored(f"Cumulative tokens used: {usage['total_tokens']}", TOOL_COLOR)
-            print_colored(f"Thank you for chatting. Goodbye!", CLAUDE_COLOR)
+            print_colored("Thank you for chatting. Goodbye!", CLAUDE_COLOR)
             break
         
         if user_input.lower() == 'token':
             usage = get_token_usage()
-            if usage['conversation_tokens']:
-                display_token_usage(usage['conversation_tokens'][-1])
-            print_colored(f"Cumulative tokens used: {usage['total_tokens']}", TOOL_COLOR)
+            print_colored("Token Usage Summary:", TOOL_COLOR)
+            print_colored(f"Total Tokens: {usage['total_tokens']}", TOOL_COLOR)
             print_colored(f"Average Tokens per Message: {usage['average_tokens_per_message']:.2f}", TOOL_COLOR)
             continue
-        
+
         if user_input.lower() == 'image':
             image_path = input(f"{USER_COLOR}Drag and drop your image here: {Style.RESET_ALL}").strip().replace("'", "")
             
@@ -721,10 +632,6 @@ def main():
                     while automode and iteration_count < max_iterations:
                         response, exit_continuation = chat_with_claude(user_input, current_iteration=iteration_count+1, max_iterations=max_iterations)
                         process_and_display_response(response)
-                        
-                        usage = get_token_usage()
-                        if usage['conversation_tokens']:
-                            display_token_usage(usage['conversation_tokens'][-1])
                         
                         if exit_continuation or CONTINUATION_EXIT_PHRASE in response:
                             print_colored("Automode completed.", TOOL_COLOR)
@@ -756,12 +663,15 @@ def main():
         else:
             response, _ = chat_with_claude(user_input)
             process_and_display_response(response)
-            
+
             usage = get_token_usage()
             if usage['conversation_tokens']:
-                display_token_usage(usage['conversation_tokens'][-1])
-            
-        print_colored(f"Cumulative tokens used: {usage['total_tokens']}", TOOL_COLOR)
+                last_message = usage['conversation_tokens'][-1]
+                print_colored(f"Tokens used: {last_message['total_tokens']} (Input: {last_message['input_tokens']}, Output: {last_message['output_tokens']})", TOOL_COLOR)
+                print_colored(f"Cumulative tokens: {usage['total_tokens']}", TOOL_COLOR)
+            else:
+                print_colored("No token usage data available for this message.", TOOL_COLOR)
+
 
 if __name__ == "__main__":
     main()
