@@ -89,7 +89,7 @@ def process_response(response: str) -> List[Tuple[str, str]]:
     
     return processed_response
 
-def print_colored(text: str, color: CLAUDE_COLOR) -> None:
+def print_colored(text: str, color: str) -> None:
     """Print text in the specified color."""
     print(f"{color}{text}{Style.RESET_ALL}")
 

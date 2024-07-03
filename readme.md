@@ -1,18 +1,20 @@
 # 🤖 Claude Engineer
 
-Claude Engineer is an interactive command-line interface (CLI) that leverages the power of Anthropic's Claude-3.5-Sonnet model to assist with software development tasks. This tool combines the capabilities of a large language model with practical file system operations and web search functionality.
+Claude Engineer is an advanced implementation of a Claude-based AI assistant with enhanced capabilities and modular architecture. It provides an interactive command-line interface (CLI) that leverages the power of Anthropic's Claude-3.5-Sonnet model to assist with software development tasks.
 
 ## ✨ Features
 
 - 💬 Interactive chat interface with Claude-3.5-Sonnet
+- 🖥️ Code Interpreter: Execute Python code within conversations
+- 🖼️ Image Support: Upload and process images during interactions
+- 🚀 Automode: Autonomous task completion with iterative goal-setting
+- 🧩 Modular Architecture: Improved code organization and maintainability
 - 📁 File system operations (create folders, files, read/write files)
 - 🔍 Web search capabilities using Tavily API
 - 🌈 Syntax highlighting for code snippets
 - 🏗️ Project structure creation and management
 - 🧐 Code analysis and improvement suggestions
-- 🖼️ Vision capabilities support via drag and drop of images in the terminal
-- 🚀 Automode for autonomous task completion
-- 🔄 Iteration tracking in automode
+- 🖼️ Vision capabilities support via terminal drag and drop of images
 
 ## 🛠️ Installation
 
@@ -22,16 +24,23 @@ Claude Engineer is an interactive command-line interface (CLI) that leverages th
    cd claude-engineer
    ```
 
-2. Install the required dependencies:
+2. Switch to the Prometheus branch:
+   ```
+   git checkout Prometheus
+   ```
+
+3. Install the required dependencies:
    ```
    pip install -r requirements.txt
    ```
 
-3. Set up your API keys:
-   - Add your Anthropic and Tavily API keys at the start of the file:
-     ```python
-     client = Anthropic(api_key="YOUR API KEY")
-     tavily = TavilyClient(api_key="YOUR API KEY")
+4. Set up your API keys:
+   - Add your Anthropic and Tavily API keys in the `config.json` file:
+     ```json
+     {
+       "anthropic_api_key": "YOUR_ANTHROPIC_API_KEY",
+       "tavily_api_key": "YOUR_TAVILY_API_KEY"
+     }
      ```
 
 ## 🚀 Usage
@@ -52,6 +61,7 @@ Once started, you can interact with Claude Engineer by typing your queries or co
 Special commands:
 - Type 'exit' to end the conversation and close the application.
 - Type 'image' to include an image in your message.
+- Type 'CODE' to execute Python code.
 - Type 'automode' plus the max amount of iterations to enter Autonomous mode.
 - Press Ctrl+C at any time to exit the automode to return to regular chat.
 
@@ -71,6 +81,15 @@ To use automode:
 4. Automode exits when the task is completed or after reaching the maximum number of iterations.
 
 Note: Claude will only have access to the files in the root folders of the script or any folder path you provide it.
+
+## ⚙️ Configuration
+
+Adjust the `config.json` file to customize the behavior of the AI assistant:
+
+- `anthropic_api_key`: Your Anthropic API key
+- `tavily_api_key`: Your Tavily API key
+- `model`: The GPT model to use (e.g., "claude-3.5-sonnet")
+- `use_code_interpreter`: Set to `true` to enable the code interpreter feature
 
 ## 👥 Contributing
 

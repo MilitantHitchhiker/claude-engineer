@@ -1,6 +1,7 @@
-anthropic
-colorama
-pygments
-tavily-python
-python-dotenv
-Pillow
+anthropic==0.3.5
+colorama==0.4.6
+Pillow==10.0.0
+pygments==2.15.1
+python-dotenv==1.0.0
+tavily-python==0.1.9
+tiktoken==0.4.0
