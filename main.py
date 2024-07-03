@@ -28,6 +28,7 @@ from typing import List, Dict, Any, Tuple
 
 from config import (
     MAX_CONTINUATION_ITERATIONS,
+    MAX_CONTINUATION_TOKENS,
     CONTINUATION_EXIT_PHRASE,
     USER_COLOR,
     CLAUDE_COLOR,
@@ -344,8 +345,9 @@ def main():
                 user_input = input(f"\n{USER_COLOR}You: {Style.RESET_ALL}")
                 
                 iteration_count = 0
+                total_tokens = 0
                 try:
-                    while automode and iteration_count < max_iterations:
+                    while automode and iteration_count < max_iterations and total_tokens < MAX_CONTINUATION_TOKENS:
                         response, exit_continuation = chat_with_claude(user_input, current_iteration=iteration_count+1, max_iterations=max_iterations)
                         process_and_display_response(response)
                         
@@ -353,11 +355,17 @@ def main():
                         usage_display = display_token_usage(usage['conversation_tokens'][-1])
                         print_colored(usage_display, TOOL_COLOR)
                         
+                        total_tokens += usage['conversation_tokens'][-1]['total_tokens']
+                        
                         if exit_continuation or CONTINUATION_EXIT_PHRASE in response:
                             print_colored("Automode completed.", TOOL_COLOR)
                             automode = False
+                        elif total_tokens >= MAX_CONTINUATION_TOKENS:
+                            print_colored("Maximum token limit reached. Exiting automode.", TOOL_COLOR)
+                            automode = False
                         else:
                             print_colored(f"Continuation iteration {iteration_count + 1} completed.", TOOL_COLOR)
+                            print_colored(f"Total tokens used: {total_tokens}", TOOL_COLOR)
                             print_colored("Press Ctrl+C to exit automode.", TOOL_COLOR)
                             user_input = "Continue with the next step."
                         
