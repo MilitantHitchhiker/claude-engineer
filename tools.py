@@ -1,10 +1,11 @@
-# tools.py
+# Tools.py
 
 from file_operations import create_folder, create_file, write_to_file, read_file, list_files
 from tavily import TavilyClient
-from config import TAVILY_API_KEY
+from config import config  # Import the config instance
 
-tavily_client = TavilyClient(api_key=TAVILY_API_KEY)
+# Initialize the Tavily client using the API key from the config instance
+tavily_client = TavilyClient(api_key=config.api_keys.get('tavily'))
 
 tools = [
     {

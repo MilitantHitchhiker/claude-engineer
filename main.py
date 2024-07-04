@@ -23,8 +23,8 @@ from datetime import datetime
 from colorama import init, Style
 from typing import List, Dict, Any, Tuple
 from config import (
-    AIModelSelector,
     Config,
+    AIModelSelector,
     MAX_CONTINUATION_ITERATIONS,
     MAX_CONTINUATION_TOKENS,
     CONTINUATION_EXIT_PHRASE,
@@ -131,8 +131,8 @@ def update_system_prompt(current_iteration: int = None, max_iterations: int = No
     return system_prompt.format(automode_status=automode_status, iteration_info=iteration_info)
 
 def chat_with_claude(user_input: str, image_path: str = None, current_iteration: int = None, max_iterations: int = None) -> Tuple[str, bool]:
-    """Process user input and generate a response using the Claude AI model."""
-    global conversation_history, automode
+    """Process user input and generate a response using the selected AI model."""
+    global conversation_history, automode, default_model, clients
     
     input_tokens = count_tokens(user_input)
     current_system_prompt = update_system_prompt(current_iteration, max_iterations)
@@ -174,9 +174,23 @@ def chat_with_claude(user_input: str, image_path: str = None, current_iteration:
     history_tokens = sum(count_tokens(str(msg.get('content', ''))) for msg in messages)
     
     try:
-        client = clients["anthropic"]
+        if not isinstance(default_model, dict) or 'provider' not in default_model or 'name' not in default_model:
+            raise ValueError("Invalid default_model structure")
+        
+        provider = default_model['provider']
+        model_name = default_model['name']
+        
+        if provider not in clients:
+            raise ValueError(f"No client found for provider: {provider}")
+        
+        client = clients[provider]
+        
+        # Get the model data from AIModelSelector
+        model_data = AIModelSelector.get_model("text_models", provider, model_name)
+        
         response = client.create_message(
-            model=default_model,
+            model=model_name,
+            max_tokens=model_data['max_tokens'],
             system=current_system_prompt,
             messages=messages,
             tools=tools,
@@ -186,10 +200,11 @@ def chat_with_claude(user_input: str, image_path: str = None, current_iteration:
         output_tokens = client.get_output_tokens(response)
         
     except Exception as e:
-        print_colored(f"Error calling AI API: {str(e)}", TOOL_COLOR)
+        error_msg = f"Error calling AI API: {type(e).__name__} - {str(e)}"
+        print_colored(error_msg, TOOL_COLOR)
         total_tokens = input_tokens + system_prompt_tokens + history_tokens
         update_token_usage(input_tokens, 0, total_tokens, system_prompt_tokens, history_tokens)
-        return "I'm sorry, there was an error communicating with the AI. Please try again.", False
+        return f"I'm sorry, there was an error communicating with the AI: {str(e)}. Please try again or check the configuration.", False
     
     total_tokens = input_tokens + output_tokens + system_prompt_tokens + history_tokens
     update_token_usage(input_tokens, output_tokens, total_tokens, system_prompt_tokens, history_tokens)
@@ -228,7 +243,8 @@ def chat_with_claude(user_input: str, image_path: str = None, current_iteration:
             
             try:
                 tool_response = client.create_message(
-                    model=default_model,
+                    model=model_name,
+                    max_tokens=model_data['max_tokens'],
                     system=current_system_prompt,
                     messages=messages,
                     tools=tools,
@@ -258,6 +274,7 @@ def chat_with_claude(user_input: str, image_path: str = None, current_iteration:
     conversation_history = messages
     
     return assistant_response, exit_continuation
+
 
 def process_and_display_response(response: str) -> None:
     """Process and display the AI's response, handling code blocks and regular text."""
@@ -316,15 +333,25 @@ def change_model():
     """Allow the user to change the current AI model."""
     global default_model
     print_colored("Available models:", TOOL_COLOR)
-    models = AIModelSelector.list_models("text_models", "anthropic")
-    for model_name in models:
-        print_colored(f"- {model_name}", TOOL_COLOR)
-    new_model_name = input(f"{USER_COLOR}Enter the name of the model you want to use: {Style.RESET_ALL}")
+    for provider, models in AIModelSelector.list_models("text_models").items():
+        print_colored(f"Provider: {provider}", TOOL_COLOR)
+        for model_name in models:
+            print_colored(f"  - {model_name}", TOOL_COLOR)
+    
+    provider = input(f"{USER_COLOR}Enter the provider name: {Style.RESET_ALL}")
+    model_name = input(f"{USER_COLOR}Enter the model name: {Style.RESET_ALL}")
+    
     try:
-        default_model = AIModelSelector.get_model("text_models", "anthropic", new_model_name)
-        print_colored(f"Model changed to {new_model_name}", TOOL_COLOR)
-    except ValueError:
-        print_colored(f"Invalid model name. Keeping the current model: {default_model.name}", TOOL_COLOR)
+        model_data = AIModelSelector.get_model("text_models", provider, model_name)
+        default_model = {
+            'provider': provider,
+            'name': model_name,
+            'data': model_data
+        }
+        print_colored(f"Model changed to {model_name} from provider {provider}.", TOOL_COLOR)
+    except ValueError as e:
+        print_colored(f"Error changing model: {str(e)}", TOOL_COLOR)
+        print_colored(f"Keeping the current model: {default_model['name']} from provider {default_model['provider']}", TOOL_COLOR)
 
 def main():
     """Main function to run the Claude Engineer chat application."""
@@ -441,7 +468,8 @@ def main():
 
 if __name__ == "__main__":
     try:
-        config = Config()  # Initialize the Config class
+        # Initialize configuration
+        config = Config()
 
         # Initialize clients using the validated API keys from config
         for api_name, api_key in config.valid_apis.items():
@@ -457,12 +485,28 @@ if __name__ == "__main__":
 
         if not clients:
             raise ValueError("No valid API keys found for AI clients.")
-        
+
         if tavily_client is None:
             print("Warning: Tavily client not initialized. Web search functionality will be unavailable.")
 
-        # Get the default model using AIModelSelector
-        default_model = AIModelSelector.get_model("text_models", "anthropic", "claude-3-sonnet-20240229")
+        # Dynamically select the default model
+        default_model = None
+        for model_type in ["text_models"]:
+            for provider in config.valid_apis.keys():
+                if provider in clients:
+                    available_model = AIModelSelector.get_available_model(model_type, provider)
+                    if available_model:
+                        default_model = {
+                            'provider': provider,
+                            'name': available_model
+                        }
+                        print(f"Default model set to {available_model} from provider {provider}.")
+                        break
+            if default_model:
+                break
+
+        if default_model is None:
+            raise ValueError("No valid text models found for any provider.")
         
         main()
     except Exception as e:

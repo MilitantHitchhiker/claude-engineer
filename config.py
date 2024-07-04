@@ -11,17 +11,22 @@ logger = logging.getLogger(__name__)
 
 class Config:
     def __init__(self):
+        logger.debug("Initializing Config...")
         self.api_keys = self.load_api_keys()
+        logger.debug(f"Loaded API keys: {self.masked_api_keys()}")
         self.valid_apis = self.validate_api_keys()
+        logger.debug(f"Validated API keys: {self.masked_valid_apis()}")
         self.model_data = self.load_model_data()
+        logger.debug(f"Loaded model data: {self.model_data}")
 
     def load_api_keys(self):
-        return {
+        api_keys = {
             "anthropic": os.environ.get('ANTHROPIC_API_KEY'),
             "openai": os.environ.get('OPENAI_API_KEY'),
             "groq": os.environ.get('GROQ_API_KEY'),
             "tavily": os.environ.get('TAVILY_API_KEY'),
         }
+        return api_keys
 
     def validate_api_keys(self):
         valid_apis = {}
@@ -52,13 +57,15 @@ class Config:
                 return False
             return True
         except Exception as e:
-            logger.warning(f"Error validating API key for {api_name}: {type(e).__name__}")
+            logger.warning(f"Error validating API key for {api_name}: {type(e).__name__} - {str(e)}")
             return False
 
     def load_model_data(self, file_path: str = 'models.json'):
         try:
             with open(file_path, 'r') as file:
-                return json.load(file)
+                model_data = json.load(file)
+                logger.debug(f"Model data loaded from {file_path}: {model_data}")
+                return model_data
         except FileNotFoundError:
             logger.error(f"Model data file not found: {file_path}")
             return {}
@@ -86,6 +93,12 @@ class Config:
             return self.model_data.get(model_type, {})
         else:
             return self.model_data
+
+    def masked_api_keys(self):
+        return {k: (v[:5] + '*****') if v else None for k, v in self.api_keys.items()}
+
+    def masked_valid_apis(self):
+        return {k: (v[:5] + '*****') if v else None for k, v in self.valid_apis.items()}
 
 # Initialize configuration
 config = Config()
