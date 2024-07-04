@@ -4,7 +4,7 @@ from file_operations import create_folder, create_file, write_to_file, read_file
 from tavily import TavilyClient
 from config import TAVILY_API_KEY
 
-tavily = TavilyClient(api_key=TAVILY_API_KEY)
+tavily_client = TavilyClient(api_key=TAVILY_API_KEY)
 
 tools = [
     {
@@ -121,7 +121,7 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
 
 def tavily_search(query: str) -> str:
     try:
-        response = tavily.qna_search(query=query, search_depth="advanced")
+        response = tavily_client.qna_search(query=query, search_depth="advanced")
         return response
     except Exception as e:
         return f"Error performing search: {str(e)}"

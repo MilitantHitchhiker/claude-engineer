@@ -84,32 +84,26 @@ def get_token_usage() -> Dict[str, Any]:
         "conversation_tokens": conversation_tokens
     }
 
-def display_token_usage(usage: Dict[str, Any], is_summary: bool = False) -> str:
-    """
-    Generate a string representation of token usage statistics.
-
-    Args:
-        usage (dict): The token usage statistics to display.
-        is_summary (bool, optional): Whether to display a summary or detailed view. Defaults to False.
-
-    Returns:
-        str: A formatted string containing the token usage information.
-    """
-    output = []
+def display_token_usage(usage, is_summary=False):
+    display = ""
     if is_summary:
-        output.append("Token Usage Summary:")
+        display += "Token Usage Summary:\n"
+        display += f"Total Conversations: {len(usage.get('conversation_tokens', []))}\n"
+        display += f"Total Tokens Used: {usage.get('total_tokens', 0)}\n"
     else:
-        output.append("Tokens used in this interaction:")
+        display += "Conversation Token Usage:\n"
+        display += f"Input Tokens: {usage.get('input_tokens', 0)}\n"
+        display += f"Output Tokens: {usage.get('output_tokens', 0)}\n"
+        display += f"Total Conversation Tokens: {usage.get('total_tokens', 0)}\n"
+        
+        if 'system_prompt_tokens' in usage:
+            display += f"System Prompt Tokens: {usage['system_prompt_tokens']}\n"
+        
+        if 'conversation_history_tokens' in usage:
+            display += f"Conversation History Tokens: {usage['conversation_history_tokens']}\n"
+        
+        if 'last_message' in usage:
+            last_message = usage['last_message']
+            display += f"\nLast Message:\n{last_message}\n"
     
-    last_message = usage['last_message']
-    output.append(f"  Input:   {last_message['input_tokens']:>6}")
-    output.append(f"  Output:  {last_message['output_tokens']:>6}")
-    output.append(f"  System:  {last_message['system_tokens']:>6}")
-    output.append(f"  History: {last_message['history_tokens']:>6}")
-    output.append(f"  Total:   {last_message['total_tokens']:>6}")
-    
-    if is_summary:
-        output.append(f"Cumulative tokens used: {usage['total_tokens']}")
-        output.append(f"Average Tokens per Message: {usage['average_tokens_per_message']:.2f}")
-    
-    return "\n".join(output)
+    return display

@@ -25,6 +25,7 @@ from colorama import init, Style, Fore
 from anthropic import Anthropic
 import re
 from typing import List, Dict, Any, Tuple
+from tavily import TavilyClient
 
 from config import (
     MAX_CONTINUATION_ITERATIONS,
@@ -34,7 +35,8 @@ from config import (
     CLAUDE_COLOR,
     TOOL_COLOR,
     RESULT_COLOR,
-    ANTHROPIC_API_KEY
+    ANTHROPIC_API_KEY,
+    TAVILY_API_KEY
 )
 from token_tracking import count_tokens, update_token_usage, get_token_usage, display_token_usage
 from file_operations import read_file, write_to_file, list_files, create_folder, create_file
@@ -45,7 +47,20 @@ from tools import tools, execute_tool
 init()
 
 # Initialize the Anthropic client
-client = Anthropic(api_key=ANTHROPIC_API_KEY)
+if ANTHROPIC_API_KEY:
+    client = Anthropic(api_key=ANTHROPIC_API_KEY)
+    print("Anthropic client initialized successfully.")
+else:
+    print("Error: Unable to initialize Anthropic client due to invalid or missing API key.")
+    exit(1)
+
+# Initialize the Tavily client
+if TAVILY_API_KEY:
+    tavily_client = TavilyClient(api_key=TAVILY_API_KEY)
+    print("Tavily client initialized successfully.")
+else:
+    print("Error: Unable to initialize Tavily client due to invalid or missing API key.")
+    exit(1)
 
 # Set up the conversation memory
 conversation_history: List[Dict[str, Any]] = []
@@ -199,6 +214,7 @@ def chat_with_claude(user_input: str, image_path: str = None, current_iteration:
     history_tokens = sum(count_tokens(str(msg.get('content', ''))) for msg in messages)
     
     try:
+        print(f"Using API key: {ANTHROPIC_API_KEY}")  # Simple print statement to show the full API key
         response = client.messages.create(
             model="claude-3-5-sonnet-20240620",
             max_tokens=4000,

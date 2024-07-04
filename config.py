@@ -1,50 +1,88 @@
-"""
-Configuration module for Claude Engineer application.
-Loads configuration from .env file and falls back to system environment variables.
-"""
 import os
-from dotenv import load_dotenv
+import json
+from typing import Dict, Any
+from anthropic import Anthropic
+import openai
+from groq import Groq
 
-# Load environment variables from .env file
-load_dotenv()
+def load_model_data(file_path: str) -> Dict[str, Any]:
+    try:
+        with open(file_path, 'r') as file:
+            return json.load(file)
+    except FileNotFoundError:
+        print(f"Model data file not found: {file_path}")
+        return {}
+    except json.JSONDecodeError:
+        print(f"Invalid JSON format in model data file: {file_path}")
+        return {}
 
-def is_placeholder(value):
-    return value.startswith('your_') and value.endswith('_here')
+def validate_api_key(api_name: str, api_key: str) -> bool:
+    if not api_key:
+        print(f"{api_name} API key is empty or not provided.")
+        return False
+   
+    try:
+        if api_name == "anthropic":
+            client = Anthropic(api_key=api_key)
+            client.completions.create(prompt="Test", model="claude-3-sonnet-20240229", max_tokens_to_sample=1)
+        elif api_name == "openai":
+            openai.api_key = api_key
+            openai.Model.list()
+        elif api_name == "groq":
+            client = Groq(api_key=api_key)
+            client.models.list()
+        # Add validation for other API providers as needed
+        return True
+    except Exception as e:
+        print(f"Error validating {api_name} API key: {str(e)}")
+        return False
 
-def get_api_key(key_name):
-    # Check .env file first
-    api_key = os.getenv(key_name)
-    if api_key and not is_placeholder(api_key):
-        return api_key
-    
-    # Fall back to system environment variables
-    api_key = os.environ.get(key_name)
-    if api_key:
-        return api_key
-    
-    # Raise an error if the API key is not found in either source
-    raise ValueError(f"{key_name} is not set. Please set it in your .env file or system environment.")
+# Load API keys from system environment variables only
+API_KEYS = {
+    "anthropic": os.environ.get('ANTHROPIC_API_KEY'),
+    "openai": os.environ.get('OPENAI_API_KEY'),
+    "groq": os.environ.get('GROQ_API_KEY'),
+    # Add other API keys as needed
+}
 
-# API Keys
-ANTHROPIC_API_KEY = get_api_key('ANTHROPIC_API_KEY')
-TAVILY_API_KEY = get_api_key('TAVILY_API_KEY')
+# Validate API keys
+for api_name, api_key in API_KEYS.items():
+    if not validate_api_key(api_name, api_key):
+        raise ValueError(f"Invalid {api_name.upper()}_API_KEY.")
 
-# Model Configuration
-MODEL_NAME = os.getenv('MODEL_NAME', 'claude-3.5-sonnet-20240620')
-MAX_TOKENS = int(os.getenv('MAX_TOKENS', '4000'))
+# Load model data from external JSON file
+MODEL_DATA_FILE = os.environ.get('MODEL_DATA_FILE', 'models.json')
+MODEL_DATA = load_model_data(MODEL_DATA_FILE)
 
 # Automode Configuration
-MAX_CONTINUATION_ITERATIONS = int(os.getenv('MAX_CONTINUATION_ITERATIONS', '10'))
-MAX_CONTINUATION_TOKENS = int(os.getenv('MAX_CONTINUATION_TOKENS', '50000'))
-CONTINUATION_EXIT_PHRASE = os.getenv('CONTINUATION_EXIT_PHRASE', 'AUTOMODE_COMPLETE')
+MAX_CONTINUATION_ITERATIONS = int(os.environ.get('MAX_CONTINUATION_ITERATIONS', '10'))
+MAX_CONTINUATION_TOKENS = int(os.environ.get('MAX_CONTINUATION_TOKENS', '50000'))
+CONTINUATION_EXIT_PHRASE = os.environ.get('CONTINUATION_EXIT_PHRASE', 'AUTOMODE_COMPLETE')
 
-# Color Configuration
-USER_COLOR = os.getenv('USER_COLOR', '\033[94m')  # Blue
-CLAUDE_COLOR = os.getenv('CLAUDE_COLOR', '\033[92m')  # Green
-TOOL_COLOR = os.getenv('TOOL_COLOR', '\033[93m')  # Yellow
-RESULT_COLOR = os.getenv('RESULT_COLOR', '\033[95m')  # Magenta
+# Color Configuration  
+USER_COLOR = os.environ.get('USER_COLOR', '\033[94m')  # Blue
+CLAUDE_COLOR = os.environ.get('CLAUDE_COLOR', '\033[92m')  # Green
+TOOL_COLOR = os.environ.get('TOOL_COLOR', '\033[93m')  # Yellow
+RESULT_COLOR = os.environ.get('RESULT_COLOR', '\033[95m')  # Magenta
 
-# Optional: Add any other configuration variables your application needs
+class AIModelSelector:
+    @staticmethod
+    def get_model(model_type: str, provider: str, model_name: str) -> Dict[str, Any]:
+        try:
+            return MODEL_DATA[model_type][provider][model_name]
+        except KeyError:
+            raise ValueError(f"Model not found: {model_type} - {provider} - {model_name}")
 
-# Example of how to add a new configuration variable:
-# DEBUG_MODE = os.getenv('DEBUG_MODE', 'False').lower() == 'true'
+    @staticmethod
+    def list_models(model_type: str = None, provider: str = None) -> Dict[str, Any]:
+        if model_type and provider:
+            return MODEL_DATA.get(model_type, {}).get(provider, {})
+        elif model_type:
+            return MODEL_DATA.get(model_type, {})
+        else:
+            return MODEL_DATA
+
+# Example usage
+# text_model = AIModelSelector.get_model("text_models", "anthropic", "claude-3-opus-20240229")
+# vision_model = AIModelSelector.get_model("vision_models", "openai", "gpt-4-vision-preview")
+# all_image_gen_models = AIModelSelector.list_models("image_generation_models")
