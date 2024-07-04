@@ -20,15 +20,8 @@ Note: Ensure all required modules are installed and API keys are properly set in
 
 import os
 from datetime import datetime
-import json
-from colorama import init, Style, Fore
-from anthropic import Anthropic
-import openai
-from groq import Groq
-import re
+from colorama import init, Style
 from typing import List, Dict, Any, Tuple
-from tavily import TavilyClient
-from config import API_KEYS, AIModelSelector, validate_api_key
 
 from config import (
     API_KEYS,
@@ -41,81 +34,22 @@ from config import (
     TOOL_COLOR,
     RESULT_COLOR
 )
+from ai_clients import AIClientFactory
 from token_tracking import count_tokens, update_token_usage, get_token_usage, display_token_usage
 from file_operations import read_file, write_to_file, list_files, create_folder, create_file
 from image_processing import encode_image_to_base64
 from tools import tools, execute_tool
+from tavily import TavilyClient
 
 # Initialize colorama
 init()
 
-# Initialize clients
+# Global variables
+automode = False
+conversation_history = []
+default_model = None
 clients = {}
-for api_name, api_key in API_KEYS.items():
-    if validate_api_key(api_name, api_key):
-        if api_name == "anthropic":
-            clients[api_name] = Anthropic(api_key=api_key)
-        elif api_name == "openai":
-            clients[api_name] = openai.api_key = api_key
-        elif api_name == "groq":
-            clients[api_name] = Groq(api_key=api_key)
-        print(f"{api_name.capitalize()} client initialized successfully.")
-    else:
-        print(f"Warning: {api_name.capitalize()} client not initialized due to invalid API key.")
-
-if not clients:
-    print("Error: No valid API keys found. Exiting.")
-    exit(1)
-
-# Set up the conversation memory
-conversation_history: List[Dict[str, Any]] = []
-
-# automode flag
-automode: bool = False
-
-# Get the default model
-default_model = AIModelSelector.get_model("text_models", "anthropic", "claude-3-sonnet-20240229")
-
-# Reimplemented chat_utils functions
-def format_code(code: str, language: str) -> str:
-    """Format code with syntax highlighting."""
-    from pygments import highlight
-    from pygments.lexers import get_lexer_by_name
-    from pygments.formatters import TerminalFormatter
-    import pygments.util
-
-    try:
-        lexer = get_lexer_by_name(language, stripall=True)
-        formatter = TerminalFormatter()
-        return highlight(code, lexer, formatter)
-    except pygments.util.ClassNotFound:
-        return f"Code (language: {language}):\n{code}"
-
-def process_response(response: str) -> List[Tuple[str, str]]:
-    """Process the AI's response, separating code blocks from regular text."""
-    processed_response = []
-    parts = response.split("```")
-    
-    for i, part in enumerate(parts):
-        if i % 2 == 0:
-            if part.strip():
-                processed_response.append(('text', part.strip()))
-        else:
-            lines = part.split('\n')
-            language = lines[0].strip() if lines else ""
-            code = '\n'.join(lines[1:]) if len(lines) > 1 else ""
-            if language and code:
-                processed_response.append(('code', (language, code)))
-            elif code:
-                processed_response.append(('code', ('', code)))
-            else:
-                processed_response.append(('text', part))
-    
-    return processed_response
-
-def print_colored(text: str, color: str) -> None:
-    """Print text in the specified color."""
-    print(f"{color}{text}{Style.RESET_ALL}")
+tavily_client = None
 
 # System prompt
 system_prompt: str = """
@@ -169,16 +103,36 @@ When in automode:
 Answer the user's request using relevant tools (if they are available). Before calling a tool, do some analysis within <thinking></thinking> tags. First, think about which of the provided tools is the relevant tool to answer the user's request. Second, go through each of the required parameters of the relevant tool and determine if the user has directly provided or given enough information to infer a value. When deciding if the parameter can be inferred, carefully consider all the context to see if it supports a specific value. If all of the required parameters are present or can be reasonably inferred, close the thinking tag and proceed with the tool call. BUT, if one of the values for a required parameter is missing, DO NOT invoke the function (not even with fillers for the missing params) and instead, ask the user to provide the missing parameters. DO NOT ask for more information on optional parameters if it is not provided.
 """
 
+def handle_error(error_message: str, error: Exception = None):
+    """
+    Print error messages in a consistent format.
+    
+    Args:
+        error_message (str): A description of the error.
+        error (Exception, optional): The exception object, if available.
+    """
+    print_colored(f"Error: {error_message}", TOOL_COLOR)
+    if error:
+        print_colored(f"Details: {str(error)}", TOOL_COLOR)
+
+def print_colored(text: str, color: str) -> None:
+    """Print text in the specified color."""
+    print(f"{color}{text}{Style.RESET_ALL}")
+
 def update_system_prompt(current_iteration: int = None, max_iterations: int = None) -> str:
-    global system_prompt
+    """Update the system prompt based on the current state of the conversation."""
+    global automode
     automode_status = "You are currently in automode." if automode else "You are not in automode."
     iteration_info = ""
     if current_iteration is not None and max_iterations is not None:
         iteration_info = f"You are currently on iteration {current_iteration} out of {max_iterations} in automode. "
         iteration_info += f"The maximum token limit for this automode session is {MAX_CONTINUATION_TOKENS}."
+    else:
+        iteration_info = "You are not currently in automode."
     return system_prompt.format(automode_status=automode_status, iteration_info=iteration_info)
 
 def chat_with_claude(user_input: str, image_path: str = None, current_iteration: int = None, max_iterations: int = None) -> Tuple[str, bool]:
+    """Process user input and generate a response using the Claude AI model."""
     global conversation_history, automode
     
     input_tokens = count_tokens(user_input)
@@ -221,19 +175,19 @@ def chat_with_claude(user_input: str, image_path: str = None, current_iteration:
     history_tokens = sum(count_tokens(str(msg.get('content', ''))) for msg in messages)
     
     try:
-        response = client.messages.create(
-            model=default_model["name"],
-            max_tokens=default_model["max_tokens"],
+        client = clients["anthropic"]
+        response = client.create_message(
+            model=default_model,
             system=current_system_prompt,
             messages=messages,
             tools=tools,
             tool_choice={"type": "auto"}
         )
         
-        output_tokens = response.usage.output_tokens
+        output_tokens = client.get_output_tokens(response)
         
     except Exception as e:
-        print_colored(f"Error calling Claude API: {str(e)}", TOOL_COLOR)
+        print_colored(f"Error calling AI API: {str(e)}", TOOL_COLOR)
         total_tokens = input_tokens + system_prompt_tokens + history_tokens
         update_token_usage(input_tokens, 0, total_tokens, system_prompt_tokens, history_tokens)
         return "I'm sorry, there was an error communicating with the AI. Please try again.", False
@@ -274,9 +228,8 @@ def chat_with_claude(user_input: str, image_path: str = None, current_iteration:
             })
             
             try:
-                tool_response = client.messages.create(
-                    model=default_model["name"],
-                    max_tokens=default_model["max_tokens"],
+                tool_response = client.create_message(
+                    model=default_model,
                     system=current_system_prompt,
                     messages=messages,
                     tools=tools,
@@ -289,7 +242,7 @@ def chat_with_claude(user_input: str, image_path: str = None, current_iteration:
                         print_colored(f"\nClaude: {tool_content_block.text}", CLAUDE_COLOR)
                 
                 tool_input_tokens = count_tokens(result)
-                tool_output_tokens = tool_response.usage.output_tokens
+                tool_output_tokens = client.get_output_tokens(tool_response)
                 tool_total_tokens = tool_input_tokens + tool_output_tokens + system_prompt_tokens + history_tokens
                 update_token_usage(tool_input_tokens, tool_output_tokens, tool_total_tokens, system_prompt_tokens, history_tokens)
                 
@@ -318,7 +271,64 @@ def process_and_display_response(response: str) -> None:
             formatted_code = format_code(code, language)
             print(formatted_code)
 
+def process_response(response: str) -> List[Tuple[str, str]]:
+    """Process the AI's response, separating code blocks from regular text."""
+    processed_response = []
+    parts = response.split("```")
+    
+    for i, part in enumerate(parts):
+        if i % 2 == 0:
+            if part.strip():
+                processed_response.append(('text', part.strip()))
+        else:
+            lines = part.split('\n')
+            language = lines[0].strip() if lines else ""
+            code = '\n'.join(lines[1:]) if len(lines) > 1 else ""
+            if language and code:
+                processed_response.append(('code', (language, code)))
+            elif code:
+                processed_response.append(('code', ('', code)))
+            else:
+                processed_response.append(('text', part))
+    
+    return processed_response
+
+def format_code(code: str, language: str) -> str:
+    """Format code with syntax highlighting."""
+    from pygments import highlight
+    from pygments.lexers import get_lexer_by_name
+    from pygments.formatters import TerminalFormatter
+    import pygments.util
+
+    try:
+        lexer = get_lexer_by_name(language, stripall=True)
+        formatter = TerminalFormatter()
+        return highlight(code, lexer, formatter)
+    except pygments.util.ClassNotFound:
+        return f"Code (language: {language}):\n{code}"
+
+def display_token_usage_summary():
+    """Display a summary of token usage."""
+    usage = get_token_usage()
+    usage_display = display_token_usage(usage, is_summary=True)
+    print_colored(usage_display, TOOL_COLOR)
+
+def change_model():
+    """Allow the user to change the current AI model."""
+    global default_model
+    print_colored("Available models:", TOOL_COLOR)
+    models = AIModelSelector.list_models("text_models", "anthropic")
+    for model_name in models:
+        print_colored(f"- {model_name}", TOOL_COLOR)
+    new_model_name = input(f"{USER_COLOR}Enter the name of the model you want to use: {Style.RESET_ALL}")
+    try:
+        default_model = AIModelSelector.get_model("text_models", "anthropic", new_model_name)
+        print_colored(f"Model changed to {new_model_name}", TOOL_COLOR)
+    except ValueError:
+        print_colored(f"Invalid model name. Keeping the current model: {default_model.name}", TOOL_COLOR)
+
 def main():
+    """Main function to run the Claude Engineer chat application."""
     global automode, conversation_history, default_model
     print_colored("Welcome to the Claude Engineer Chat with Image Support!", CLAUDE_COLOR)
     print_colored("Type 'exit' to end the conversation.", CLAUDE_COLOR)
@@ -326,114 +336,136 @@ def main():
     print_colored("Type 'automode [number]' to enter Autonomous mode with a specific number of iterations.", CLAUDE_COLOR)
     print_colored("Type 'token' to see the token usage summary.", CLAUDE_COLOR)
     print_colored("Type 'model' to change the current model.", CLAUDE_COLOR)
-    print_colored("While in automode, press Ctrl+C at any time to exit the automode to return to regular chat.", CLAUDE_COLOR)
+    print_colored("While in automode, press Ctrl+C at any time to exit automode to return to regular chat.", CLAUDE_COLOR)
     
     while True:
-        user_input = input(f"\n{USER_COLOR}You: {Style.RESET_ALL}")
-        
-        if user_input.lower() == 'exit':
-            usage = get_token_usage()
-            usage_display = display_token_usage(usage, is_summary=True)
-            print_colored(usage_display, TOOL_COLOR)
-            print_colored("Thank you for chatting. Goodbye!", CLAUDE_COLOR)
-            break
-        
-        if user_input.lower() == 'token':
-            usage = get_token_usage()
-            usage_display = display_token_usage(usage, is_summary=True)
-            print_colored(usage_display, TOOL_COLOR)
-            continue
-        
-        if user_input.lower() == 'model':
-            print_colored("Available models:", TOOL_COLOR)
-            models = AIModelSelector.list_models("text_models", "anthropic")
-            for model_name, model_info in models.items():
-                print_colored(f"- {model_name}", TOOL_COLOR)
-            new_model_name = input(f"{USER_COLOR}Enter the name of the model you want to use: {Style.RESET_ALL}")
-            try:
-                default_model = AIModelSelector.get_model("text_models", "anthropic", new_model_name)
-                print_colored(f"Model changed to {new_model_name}", TOOL_COLOR)
-            except ValueError:
-                print_colored(f"Invalid model name. Keeping the current model: {default_model['name']}", TOOL_COLOR)
-            continue
-        
-        if user_input.lower() == 'image':
-            image_path = input(f"{USER_COLOR}Drag and drop your image here: {Style.RESET_ALL}").strip().replace("'", "")
+        try:
+            user_input = input(f"\n{USER_COLOR}You: {Style.RESET_ALL}")
             
-            if os.path.isfile(image_path):
-                user_input = input(f"{USER_COLOR}You (prompt for image): {Style.RESET_ALL}")
-                response, _ = chat_with_claude(user_input, image_path)
-                process_and_display_response(response)
-            else:
-                print_colored("Invalid image path. Please try again.", CLAUDE_COLOR)
+            if user_input.lower() == 'exit':
+                display_token_usage_summary()
+                print_colored("Thank you for chatting. Goodbye!", CLAUDE_COLOR)
+                break
+            
+            if user_input.lower() == 'token':
+                display_token_usage_summary()
                 continue
-        elif user_input.lower().startswith('automode'):
-            try:
-                parts = user_input.split()
-                if len(parts) > 1 and parts[1].isdigit():
-                    max_iterations = int(parts[1])
+            
+            if user_input.lower() == 'model':
+                change_model()
+                continue
+            
+            if user_input.lower() == 'image':
+                image_path = input(f"{USER_COLOR}Drag and drop your image here: {Style.RESET_ALL}").strip().replace("'", "")
+                
+                if os.path.isfile(image_path):
+                    user_input = input(f"{USER_COLOR}You (prompt for image): {Style.RESET_ALL}")
+                    response, _ = chat_with_claude(user_input, image_path)
+                    process_and_display_response(response)
                 else:
-                    max_iterations = MAX_CONTINUATION_ITERATIONS
-                
-                automode = True
-                print_colored(f"Entering automode with {max_iterations} iterations. Press Ctrl+C to exit automode at any time.", TOOL_COLOR)
-                user_input = input(f"\n{USER_COLOR}You: {Style.RESET_ALL}")
-                
-                iteration_count = 0
-                total_tokens = 0
+                    print_colored("Invalid image path. Please try again.", CLAUDE_COLOR)
+                    continue
+            elif user_input.lower().startswith('automode'):
                 try:
-                    while automode and iteration_count < max_iterations and total_tokens < MAX_CONTINUATION_TOKENS:
-                        response, exit_continuation = chat_with_claude(
-                            user_input, 
-                            current_iteration=iteration_count+1, 
-                            max_iterations=max_iterations
-                        )
-                        process_and_display_response(response)
-                        
-                        usage = get_token_usage()
-                        usage_display = display_token_usage(usage['conversation_tokens'][-1])
-                        print_colored(usage_display, TOOL_COLOR)
-                        
-                        total_tokens += usage['conversation_tokens'][-1]['total_tokens']
-                        
-                        if exit_continuation or CONTINUATION_EXIT_PHRASE in response:
-                            print_colored("Automode completed.", TOOL_COLOR)
-                            automode = False
-                        elif total_tokens >= MAX_CONTINUATION_TOKENS:
-                            print_colored("Maximum token limit reached. Exiting automode.", TOOL_COLOR)
-                            automode = False
-                        else:
-                            print_colored(f"Continuation iteration {iteration_count + 1} completed.", TOOL_COLOR)
-                            print_colored(f"Total tokens used: {total_tokens}", TOOL_COLOR)
-                            print_colored(f"Tokens remaining: {MAX_CONTINUATION_TOKENS - total_tokens}", TOOL_COLOR)
-                            print_colored("Press Ctrl+C to exit automode.", TOOL_COLOR)
-                            user_input = "Continue with the next step."
-                        
-                        iteration_count += 1
-                        
-                        if iteration_count >= max_iterations:
-                            print_colored("Max iterations reached. Exiting automode.", TOOL_COLOR)
-                            automode = False
-
+                    parts = user_input.split()
+                    if len(parts) > 1 and parts[1].isdigit():
+                        max_iterations = int(parts[1])
+                    else:
+                        max_iterations = MAX_CONTINUATION_ITERATIONS
+                    
+                    automode = True
+                    print_colored(f"Entering automode with {max_iterations} iterations. Press Ctrl+C to exit automode at any time.", TOOL_COLOR)
+                    user_input = input(f"\n{USER_COLOR}You: {Style.RESET_ALL}")
+                    
+                    iteration_count = 0
+                    total_tokens = 0
+                    try:
+                        while automode and iteration_count < max_iterations and total_tokens < MAX_CONTINUATION_TOKENS:
+                            response, exit_continuation = chat_with_claude(
+                                user_input, 
+                                current_iteration=iteration_count+1, 
+                                max_iterations=max_iterations
+                            )
+                            process_and_display_response(response)
+                            
+                            usage = get_token_usage()
+                            usage_display = display_token_usage(usage['conversation_tokens'][-1])
+                            print_colored(usage_display, TOOL_COLOR)
+                            
+                            total_tokens += usage['conversation_tokens'][-1]['total_tokens']
+                            
+                            if exit_continuation or CONTINUATION_EXIT_PHRASE in response:
+                                print_colored("Automode completed.", TOOL_COLOR)
+                                automode = False
+                            elif total_tokens >= MAX_CONTINUATION_TOKENS:
+                                print_colored("Maximum token limit reached. Exiting automode.", TOOL_COLOR)
+                                automode = False
+                            else:
+                                print_colored(f"Continuation iteration {iteration_count + 1} completed.", TOOL_COLOR)
+                                print_colored(f"Total tokens used: {total_tokens}", TOOL_COLOR)
+                                print_colored(f"Tokens remaining: {MAX_CONTINUATION_TOKENS - total_tokens}", TOOL_COLOR)
+                                print_colored("Press Ctrl+C to exit automode.", TOOL_COLOR)
+                                user_input = "Continue with the next step."
+                            
+                            iteration_count += 1
+                            
+                            if iteration_count >= max_iterations:
+                                print_colored("Max iterations reached. Exiting automode.", TOOL_COLOR)
+                                automode = False
+                    except KeyboardInterrupt:
+                        print_colored("\nAutomode interrupted by user. Exiting automode.", TOOL_COLOR)
+                        automode = False
+                        if conversation_history and conversation_history[-1]["role"] == "user":
+                            conversation_history.append({"role": "assistant", "content": "Automode interrupted. How can I assist you further?"})
                 except KeyboardInterrupt:
                     print_colored("\nAutomode interrupted by user. Exiting automode.", TOOL_COLOR)
                     automode = False
                     if conversation_history and conversation_history[-1]["role"] == "user":
                         conversation_history.append({"role": "assistant", "content": "Automode interrupted. How can I assist you further?"})
-            except KeyboardInterrupt:
-                print_colored("\nAutomode interrupted by user. Exiting automode.", TOOL_COLOR)
-                automode = False
-                if conversation_history and conversation_history[-1]["role"] == "user":
-                    conversation_history.append({"role": "assistant", "content": "Automode interrupted. How can I assist you further?"})
-            
-            print_colored("Exited automode. Returning to regular chat.", TOOL_COLOR)
-        else:
-            response, _ = chat_with_claude(user_input)
-            process_and_display_response(response)
-            
-            usage = get_token_usage()
-            usage_display = display_token_usage(usage['conversation_tokens'][-1])
-            print_colored(usage_display, TOOL_COLOR)
+                
+                print_colored("Exited automode. Returning to regular chat.", TOOL_COLOR)
+            else:
+                response, _ = chat_with_claude(user_input)
+                process_and_display_response(response)
+                
+                usage = get_token_usage()
+                usage_display = display_token_usage(usage['conversation_tokens'][-1])
+                print_colored(usage_display, TOOL_COLOR)
+                
+        except KeyboardInterrupt:
+            print_colored("\nKeyboard interrupt detected. Exiting current mode.", TOOL_COLOR)
+            automode = False
+        except Exception as e:
+            handle_error("Unexpected error in main loop", e)
+    
+    print_colored("Thank you for using Claude Engineer. Goodbye!", CLAUDE_COLOR)
 
 if __name__ == "__main__":
-    main()
+    try:
+        # Initialize clients
+        for api_name, api_key in API_KEYS.items():
+            if api_key:
+                try:
+                    if api_name == "tavily":
+                        tavily_client = TavilyClient(api_key=api_key)
+                        print("Tavily client initialized successfully.")
+                    else:
+                        clients[api_name] = AIClientFactory.get_client(api_name)
+                        print(f"{api_name.capitalize()} client initialized successfully.")
+                except Exception as e:
+                    print(f"Warning: Failed to initialize {api_name} client. Error: {str(e)}")
+
+        if not clients:
+            raise ValueError("No valid API keys found for AI clients.")
+        
+        if tavily_client is None:
+            print("Warning: Tavily client not initialized. Web search functionality will be unavailable.")
+
+        # Get the default model
+        default_model = AIModelSelector.get_model("text_models", "anthropic", "claude-3-sonnet-20240229")
+        
+        main()
+    except Exception as e:
+        handle_error("Critical error in main function", e)
+    finally:
+        print_colored("Claude Engineer shutting down.", CLAUDE_COLOR)
