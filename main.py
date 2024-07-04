@@ -23,20 +23,23 @@ from datetime import datetime
 import json
 from colorama import init, Style, Fore
 from anthropic import Anthropic
+import openai
+from groq import Groq
 import re
 from typing import List, Dict, Any, Tuple
 from tavily import TavilyClient
+from config import API_KEYS, AIModelSelector, validate_api_key
 
 from config import (
+    API_KEYS,
+    AIModelSelector,
     MAX_CONTINUATION_ITERATIONS,
     MAX_CONTINUATION_TOKENS,
     CONTINUATION_EXIT_PHRASE,
     USER_COLOR,
     CLAUDE_COLOR,
     TOOL_COLOR,
-    RESULT_COLOR,
-    ANTHROPIC_API_KEY,
-    TAVILY_API_KEY
+    RESULT_COLOR
 )
 from token_tracking import count_tokens, update_token_usage, get_token_usage, display_token_usage
 from file_operations import read_file, write_to_file, list_files, create_folder, create_file
@@ -46,20 +49,22 @@ from tools import tools, execute_tool
 # Initialize colorama
 init()
 
-# Initialize the Anthropic client
-if ANTHROPIC_API_KEY:
-    client = Anthropic(api_key=ANTHROPIC_API_KEY)
-    print("Anthropic client initialized successfully.")
-else:
-    print("Error: Unable to initialize Anthropic client due to invalid or missing API key.")
-    exit(1)
+# Initialize clients
+clients = {}
+for api_name, api_key in API_KEYS.items():
+    if validate_api_key(api_name, api_key):
+        if api_name == "anthropic":
+            clients[api_name] = Anthropic(api_key=api_key)
+        elif api_name == "openai":
+            clients[api_name] = openai.api_key = api_key
+        elif api_name == "groq":
+            clients[api_name] = Groq(api_key=api_key)
+        print(f"{api_name.capitalize()} client initialized successfully.")
+    else:
+        print(f"Warning: {api_name.capitalize()} client not initialized due to invalid API key.")
 
-# Initialize the Tavily client
-if TAVILY_API_KEY:
-    tavily_client = TavilyClient(api_key=TAVILY_API_KEY)
-    print("Tavily client initialized successfully.")
-else:
-    print("Error: Unable to initialize Tavily client due to invalid or missing API key.")
+if not clients:
+    print("Error: No valid API keys found. Exiting.")
     exit(1)
 
 # Set up the conversation memory
@@ -67,6 +72,9 @@ conversation_history: List[Dict[str, Any]] = []
 
 # automode flag
 automode: bool = False
+
+# Get the default model
+default_model = AIModelSelector.get_model("text_models", "anthropic", "claude-3-sonnet-20240229")
 
 # Reimplemented chat_utils functions
 def format_code(code: str, language: str) -> str:
@@ -162,16 +170,15 @@ Answer the user's request using relevant tools (if they are available). Before c
 """
 
 def update_system_prompt(current_iteration: int = None, max_iterations: int = None) -> str:
-    """Update the system prompt with current automode status and iteration information."""
     global system_prompt
     automode_status = "You are currently in automode." if automode else "You are not in automode."
     iteration_info = ""
     if current_iteration is not None and max_iterations is not None:
-        iteration_info = f"You are currently on iteration {current_iteration} out of {max_iterations} in automode."
+        iteration_info = f"You are currently on iteration {current_iteration} out of {max_iterations} in automode. "
+        iteration_info += f"The maximum token limit for this automode session is {MAX_CONTINUATION_TOKENS}."
     return system_prompt.format(automode_status=automode_status, iteration_info=iteration_info)
 
 def chat_with_claude(user_input: str, image_path: str = None, current_iteration: int = None, max_iterations: int = None) -> Tuple[str, bool]:
-    """Interact with the Claude AI model, process the response, and handle tool usage."""
     global conversation_history, automode
     
     input_tokens = count_tokens(user_input)
@@ -214,10 +221,9 @@ def chat_with_claude(user_input: str, image_path: str = None, current_iteration:
     history_tokens = sum(count_tokens(str(msg.get('content', ''))) for msg in messages)
     
     try:
-        print(f"Using API key: {ANTHROPIC_API_KEY}")  # Simple print statement to show the full API key
         response = client.messages.create(
-            model="claude-3-5-sonnet-20240620",
-            max_tokens=4000,
+            model=default_model["name"],
+            max_tokens=default_model["max_tokens"],
             system=current_system_prompt,
             messages=messages,
             tools=tools,
@@ -269,8 +275,8 @@ def chat_with_claude(user_input: str, image_path: str = None, current_iteration:
             
             try:
                 tool_response = client.messages.create(
-                    model="claude-3-5-sonnet-20240620",
-                    max_tokens=4000,
+                    model=default_model["name"],
+                    max_tokens=default_model["max_tokens"],
                     system=current_system_prompt,
                     messages=messages,
                     tools=tools,
@@ -313,13 +319,13 @@ def process_and_display_response(response: str) -> None:
             print(formatted_code)
 
 def main():
-    """Main function to run the Claude-3.5-Sonnet Engineer Chat application."""
-    global automode, conversation_history
-    print_colored("Welcome to the Claude-3.5-Sonnet Engineer Chat with Image Support!", CLAUDE_COLOR)
+    global automode, conversation_history, default_model
+    print_colored("Welcome to the Claude Engineer Chat with Image Support!", CLAUDE_COLOR)
     print_colored("Type 'exit' to end the conversation.", CLAUDE_COLOR)
     print_colored("Type 'image' to include an image in your message.", CLAUDE_COLOR)
     print_colored("Type 'automode [number]' to enter Autonomous mode with a specific number of iterations.", CLAUDE_COLOR)
     print_colored("Type 'token' to see the token usage summary.", CLAUDE_COLOR)
+    print_colored("Type 'model' to change the current model.", CLAUDE_COLOR)
     print_colored("While in automode, press Ctrl+C at any time to exit the automode to return to regular chat.", CLAUDE_COLOR)
     
     while True:
@@ -336,6 +342,19 @@ def main():
             usage = get_token_usage()
             usage_display = display_token_usage(usage, is_summary=True)
             print_colored(usage_display, TOOL_COLOR)
+            continue
+        
+        if user_input.lower() == 'model':
+            print_colored("Available models:", TOOL_COLOR)
+            models = AIModelSelector.list_models("text_models", "anthropic")
+            for model_name, model_info in models.items():
+                print_colored(f"- {model_name}", TOOL_COLOR)
+            new_model_name = input(f"{USER_COLOR}Enter the name of the model you want to use: {Style.RESET_ALL}")
+            try:
+                default_model = AIModelSelector.get_model("text_models", "anthropic", new_model_name)
+                print_colored(f"Model changed to {new_model_name}", TOOL_COLOR)
+            except ValueError:
+                print_colored(f"Invalid model name. Keeping the current model: {default_model['name']}", TOOL_COLOR)
             continue
         
         if user_input.lower() == 'image':
@@ -364,7 +383,11 @@ def main():
                 total_tokens = 0
                 try:
                     while automode and iteration_count < max_iterations and total_tokens < MAX_CONTINUATION_TOKENS:
-                        response, exit_continuation = chat_with_claude(user_input, current_iteration=iteration_count+1, max_iterations=max_iterations)
+                        response, exit_continuation = chat_with_claude(
+                            user_input, 
+                            current_iteration=iteration_count+1, 
+                            max_iterations=max_iterations
+                        )
                         process_and_display_response(response)
                         
                         usage = get_token_usage()
@@ -382,6 +405,7 @@ def main():
                         else:
                             print_colored(f"Continuation iteration {iteration_count + 1} completed.", TOOL_COLOR)
                             print_colored(f"Total tokens used: {total_tokens}", TOOL_COLOR)
+                            print_colored(f"Tokens remaining: {MAX_CONTINUATION_TOKENS - total_tokens}", TOOL_COLOR)
                             print_colored("Press Ctrl+C to exit automode.", TOOL_COLOR)
                             user_input = "Continue with the next step."
                         
@@ -390,6 +414,7 @@ def main():
                         if iteration_count >= max_iterations:
                             print_colored("Max iterations reached. Exiting automode.", TOOL_COLOR)
                             automode = False
+
                 except KeyboardInterrupt:
                     print_colored("\nAutomode interrupted by user. Exiting automode.", TOOL_COLOR)
                     automode = False

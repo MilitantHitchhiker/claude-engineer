@@ -1,11 +1,10 @@
 import os
 import json
-from typing import Dict, Any
 from anthropic import Anthropic
 import openai
 from groq import Groq
 
-def load_model_data(file_path: str) -> Dict[str, Any]:
+def load_model_data(file_path):
     try:
         with open(file_path, 'r') as file:
             return json.load(file)
@@ -16,7 +15,7 @@ def load_model_data(file_path: str) -> Dict[str, Any]:
         print(f"Invalid JSON format in model data file: {file_path}")
         return {}
 
-def validate_api_key(api_name: str, api_key: str) -> bool:
+def validate_api_key(api_name, api_key):
     if not api_key:
         print(f"{api_name} API key is empty or not provided.")
         return False
@@ -48,7 +47,8 @@ API_KEYS = {
 # Validate API keys
 for api_name, api_key in API_KEYS.items():
     if not validate_api_key(api_name, api_key):
-        raise ValueError(f"Invalid {api_name.upper()}_API_KEY.")
+        print(f"Warning: Invalid {api_name.upper()}_API_KEY. This provider will not be available.")
+        API_KEYS[api_name] = None
 
 # Load model data from external JSON file
 MODEL_DATA_FILE = os.environ.get('MODEL_DATA_FILE', 'models.json')
@@ -67,14 +67,14 @@ RESULT_COLOR = os.environ.get('RESULT_COLOR', '\033[95m')  # Magenta
 
 class AIModelSelector:
     @staticmethod
-    def get_model(model_type: str, provider: str, model_name: str) -> Dict[str, Any]:
+    def get_model(model_type, provider, model_name):
         try:
             return MODEL_DATA[model_type][provider][model_name]
         except KeyError:
             raise ValueError(f"Model not found: {model_type} - {provider} - {model_name}")
 
     @staticmethod
-    def list_models(model_type: str = None, provider: str = None) -> Dict[str, Any]:
+    def list_models(model_type=None, provider=None):
         if model_type and provider:
             return MODEL_DATA.get(model_type, {}).get(provider, {})
         elif model_type:
