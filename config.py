@@ -5,17 +5,6 @@ import openai
 from groq import Groq
 import logging
 
-# Automode Configuration
-MAX_CONTINUATION_ITERATIONS = int(os.environ.get('MAX_CONTINUATION_ITERATIONS', '10'))
-MAX_CONTINUATION_TOKENS = int(os.environ.get('MAX_CONTINUATION_TOKENS', '50000'))
-CONTINUATION_EXIT_PHRASE = os.environ.get('CONTINUATION_EXIT_PHRASE', 'AUTOMODE_COMPLETE')
-
-# Color Configuration  
-USER_COLOR = os.environ.get('USER_COLOR', '\033[94m')  # Blue
-CLAUDE_COLOR = os.environ.get('CLAUDE_COLOR', '\033[92m')  # Green
-TOOL_COLOR = os.environ.get('TOOL_COLOR', '\033[93m')  # Yellow
-RESULT_COLOR = os.environ.get('RESULT_COLOR', '\033[95m')  # Magenta
-
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -35,13 +24,17 @@ class Config:
         }
 
     def validate_api_keys(self):
-        return {api_name for api_name, api_key in self.api_keys.items() if self.validate_api_key(api_name, api_key)}
+        valid_apis = {}
+        for api_name, api_key in self.api_keys.items():
+            if self.validate_api_key(api_name, api_key):
+                valid_apis[api_name] = api_key
+        return valid_apis
 
     def validate_api_key(self, api_name: str, api_key: str) -> bool:
         if not api_key:
             logger.info(f"API key for {api_name} is not provided.")
             return False
-        
+
         try:
             if api_name == "anthropic":
                 client = Anthropic(api_key=api_key)
@@ -110,7 +103,13 @@ class AIModelSelector:
     def list_models(model_type: str = None, provider: str = None):
         return config.list_models(model_type, provider)
 
-# Example usage
-text_model = AIModelSelector.get_model("text_models", "anthropic", "claude-3-sonnet-20240229")
-vision_model = AIModelSelector.get_model("vision_models", "openai", "gpt-4-vision-preview")
-all_image_gen_models = AIModelSelector.list_models("image_generation_models")
+# Constants from the config file
+MAX_CONTINUATION_ITERATIONS = int(os.environ.get('MAX_CONTINUATION_ITERATIONS', '10'))
+MAX_CONTINUATION_TOKENS = int(os.environ.get('MAX_CONTINUATION_TOKENS', '50000'))
+CONTINUATION_EXIT_PHRASE = os.environ.get('CONTINUATION_EXIT_PHRASE', 'AUTOMODE_COMPLETE')
+
+# Color Configuration
+USER_COLOR = os.environ.get('USER_COLOR', '\033[94m')  # Blue
+CLAUDE_COLOR = os.environ.get('CLAUDE_COLOR', '\033[92m')  # Green
+TOOL_COLOR = os.environ.get('TOOL_COLOR', '\033[93m')  # Yellow
+RESULT_COLOR = os.environ.get('RESULT_COLOR', '\033[95m')  # Magenta

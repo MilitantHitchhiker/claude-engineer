@@ -22,10 +22,9 @@ import os
 from datetime import datetime
 from colorama import init, Style
 from typing import List, Dict, Any, Tuple
-
 from config import (
-    API_KEYS,
     AIModelSelector,
+    Config,
     MAX_CONTINUATION_ITERATIONS,
     MAX_CONTINUATION_TOKENS,
     CONTINUATION_EXIT_PHRASE,
@@ -42,7 +41,7 @@ from tools import tools, execute_tool
 from tavily import TavilyClient
 
 # Initialize colorama
-init()
+init(autoreset=True)
 
 # Global variables
 automode = False
@@ -442,18 +441,19 @@ def main():
 
 if __name__ == "__main__":
     try:
-        # Initialize clients
-        for api_name, api_key in API_KEYS.items():
-            if api_key:
-                try:
-                    if api_name == "tavily":
-                        tavily_client = TavilyClient(api_key=api_key)
-                        print("Tavily client initialized successfully.")
-                    else:
-                        clients[api_name] = AIClientFactory.get_client(api_name)
-                        print(f"{api_name.capitalize()} client initialized successfully.")
-                except Exception as e:
-                    print(f"Warning: Failed to initialize {api_name} client. Error: {str(e)}")
+        config = Config()  # Initialize the Config class
+
+        # Initialize clients using the validated API keys from config
+        for api_name, api_key in config.valid_apis.items():
+            try:
+                if api_name == "tavily":
+                    tavily_client = TavilyClient(api_key=api_key)
+                    print("Tavily client initialized successfully.")
+                else:
+                    clients[api_name] = AIClientFactory.get_client(api_name)
+                    print(f"{api_name.capitalize()} client initialized successfully.")
+            except Exception as e:
+                print(f"Warning: Failed to initialize {api_name} client. Error: {str(e)}")
 
         if not clients:
             raise ValueError("No valid API keys found for AI clients.")
@@ -461,7 +461,7 @@ if __name__ == "__main__":
         if tavily_client is None:
             print("Warning: Tavily client not initialized. Web search functionality will be unavailable.")
 
-        # Get the default model
+        # Get the default model using AIModelSelector
         default_model = AIModelSelector.get_model("text_models", "anthropic", "claude-3-sonnet-20240229")
         
         main()
