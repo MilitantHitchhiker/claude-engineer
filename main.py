@@ -22,17 +22,7 @@ import os
 from datetime import datetime
 from colorama import init, Style
 from typing import List, Dict, Any, Tuple
-from config import (
-    Config,
-    AIModelSelector,
-    MAX_CONTINUATION_ITERATIONS,
-    MAX_CONTINUATION_TOKENS,
-    CONTINUATION_EXIT_PHRASE,
-    USER_COLOR,
-    CLAUDE_COLOR,
-    TOOL_COLOR,
-    RESULT_COLOR
-)
+from config import Config, AIModelSelector, MAX_CONTINUATION_ITERATIONS, MAX_CONTINUATION_TOKENS, CONTINUATION_EXIT_PHRASE, USER_COLOR, CLAUDE_COLOR, TOOL_COLOR, RESULT_COLOR
 from ai_clients import AIClientFactory
 from token_tracking import count_tokens, update_token_usage, get_token_usage, display_token_usage
 from file_operations import read_file, write_to_file, list_files, create_folder, create_file
@@ -42,6 +32,9 @@ from tavily import TavilyClient
 
 # Initialize colorama
 init(autoreset=True)
+
+# Initialise configuration
+config = Config()
 
 # Global variables
 automode = False
@@ -188,16 +181,84 @@ def chat_with_claude(user_input: str, image_path: str = None, current_iteration:
         # Get the model data from AIModelSelector
         model_data = AIModelSelector.get_model("text_models", provider, model_name)
         
-        response = client.create_message(
-            model=model_name,
-            max_tokens=model_data['max_tokens'],
-            system=current_system_prompt,
-            messages=messages,
-            tools=tools,
-            tool_choice={"type": "auto"}
-        )
+        # Prepare common parameters
+        common_params = {
+            "model": model_name,
+            "messages": [{"role": "system", "content": current_system_prompt}] + messages,
+        }
         
-        output_tokens = client.get_output_tokens(response)
+        # Add provider-specific parameters and make API call
+        if provider == "groq":
+            response = client.chat.completions.create(**common_params)
+        elif provider == "openai":
+            response = client.ChatCompletion.create(**common_params)
+        elif provider == "anthropic":
+            common_params.update({
+                "max_tokens": model_data['max_tokens'],
+                "tools": tools,
+                "tool_choice": {"type": "auto"}
+            })
+            response = client.messages.create(**common_params)
+        else:
+            raise ValueError(f"Unsupported provider: {provider}")
+        
+        # Process the response based on the provider
+        assistant_response = ""
+        exit_continuation = False
+        
+        if provider in ["groq", "openai"]:
+            assistant_response = response.choices[0].message.content
+            output_tokens = response.usage.completion_tokens
+            if CONTINUATION_EXIT_PHRASE in assistant_response:
+                exit_continuation = True
+        elif provider == "anthropic":
+            for content_block in response.content:
+                if content_block.type == "text":
+                    assistant_response += content_block.text
+                    print_colored(f"\nClaude: {content_block.text}", CLAUDE_COLOR)
+                    if CONTINUATION_EXIT_PHRASE in content_block.text:
+                        exit_continuation = True
+                elif content_block.type == "tool_use":
+                    tool_name = content_block.name
+                    tool_input = content_block.input
+                    tool_use_id = content_block.id
+                    
+                    print_colored(f"\nTool Used: {tool_name}", TOOL_COLOR)
+                    print_colored(f"Tool Input: {tool_input}", TOOL_COLOR)
+                    
+                    result = execute_tool(tool_name, tool_input)
+                    print_colored(f"Tool Result: {result}", RESULT_COLOR)
+                    
+                    messages.append({"role": "assistant", "content": [content_block]})
+                    messages.append({
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": tool_use_id,
+                                "content": result
+                            }
+                        ]
+                    })
+                    
+                    try:
+                        tool_response = client.messages.create(**common_params)
+                        
+                        for tool_content_block in tool_response.content:
+                            if tool_content_block.type == "text":
+                                assistant_response += tool_content_block.text
+                                print_colored(f"\nClaude: {tool_content_block.text}", CLAUDE_COLOR)
+                        
+                        tool_input_tokens = count_tokens(result)
+                        tool_output_tokens = client.get_output_tokens(tool_response)
+                        tool_total_tokens = tool_input_tokens + tool_output_tokens + system_prompt_tokens + history_tokens
+                        update_token_usage(tool_input_tokens, tool_output_tokens, tool_total_tokens, system_prompt_tokens, history_tokens)
+                        
+                    except Exception as e:
+                        print_colored(f"Error in tool response: {str(e)}", TOOL_COLOR)
+                        assistant_response += "\nI encountered an error while processing the tool result. Please try again."
+            
+            output_tokens = response.usage.output_tokens
         
     except Exception as e:
         error_msg = f"Error calling AI API: {type(e).__name__} - {str(e)}"
@@ -208,62 +269,6 @@ def chat_with_claude(user_input: str, image_path: str = None, current_iteration:
     
     total_tokens = input_tokens + output_tokens + system_prompt_tokens + history_tokens
     update_token_usage(input_tokens, output_tokens, total_tokens, system_prompt_tokens, history_tokens)
-    
-    assistant_response = ""
-    exit_continuation = False
-    
-    for content_block in response.content:
-        if content_block.type == "text":
-            assistant_response += content_block.text
-            print_colored(f"\nClaude: {content_block.text}", CLAUDE_COLOR)
-            if CONTINUATION_EXIT_PHRASE in content_block.text:
-                exit_continuation = True
-        elif content_block.type == "tool_use":
-            tool_name = content_block.name
-            tool_input = content_block.input
-            tool_use_id = content_block.id
-            
-            print_colored(f"\nTool Used: {tool_name}", TOOL_COLOR)
-            print_colored(f"Tool Input: {tool_input}", TOOL_COLOR)
-            
-            result = execute_tool(tool_name, tool_input)
-            print_colored(f"Tool Result: {result}", RESULT_COLOR)
-            
-            messages.append({"role": "assistant", "content": [content_block]})
-            messages.append({
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": tool_use_id,
-                        "content": result
-                    }
-                ]
-            })
-            
-            try:
-                tool_response = client.create_message(
-                    model=model_name,
-                    max_tokens=model_data['max_tokens'],
-                    system=current_system_prompt,
-                    messages=messages,
-                    tools=tools,
-                    tool_choice={"type": "auto"}
-                )
-                
-                for tool_content_block in tool_response.content:
-                    if tool_content_block.type == "text":
-                        assistant_response += tool_content_block.text
-                        print_colored(f"\nClaude: {tool_content_block.text}", CLAUDE_COLOR)
-                
-                tool_input_tokens = count_tokens(result)
-                tool_output_tokens = client.get_output_tokens(tool_response)
-                tool_total_tokens = tool_input_tokens + tool_output_tokens + system_prompt_tokens + history_tokens
-                update_token_usage(tool_input_tokens, tool_output_tokens, tool_total_tokens, system_prompt_tokens, history_tokens)
-                
-            except Exception as e:
-                print_colored(f"Error in tool response: {str(e)}", TOOL_COLOR)
-                assistant_response += "\nI encountered an error while processing the tool result. Please try again."
     
     if assistant_response:
         messages.append({
