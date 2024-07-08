@@ -4,6 +4,7 @@ from anthropic import Anthropic
 import openai
 from groq import Groq
 import logging
+from typing import Dict, Any
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -19,7 +20,8 @@ class Config:
         self.model_data = self.load_model_data()
         logger.debug(f"Loaded model data: {self.model_data}")
 
-    def load_api_keys(self):
+    def load_api_keys(self) -> Dict[str, str]:
+        """Load API keys from environment variables."""
         api_keys = {
             "anthropic": os.environ.get('ANTHROPIC_API_KEY'),
             "openai": os.environ.get('OPENAI_API_KEY'),
@@ -28,7 +30,8 @@ class Config:
         }
         return api_keys
 
-    def validate_api_keys(self):
+    def validate_api_keys(self) -> Dict[str, str]:
+        """Validate API keys by attempting to use them."""
         valid_apis = {}
         for api_name, api_key in self.api_keys.items():
             if self.validate_api_key(api_name, api_key):
@@ -36,6 +39,7 @@ class Config:
         return valid_apis
 
     def validate_api_key(self, api_name: str, api_key: str) -> bool:
+        """Validate a single API key by attempting to use it."""
         if not api_key:
             logger.info(f"API key for {api_name} is not provided.")
             return False
@@ -49,7 +53,7 @@ class Config:
                 openai.Model.list()
             elif api_name == "groq":
                 client = Groq(api_key=api_key)
-                client.models.list()
+                client.chat.completions.create(model="mixtral-8x7b-32768", messages=[{"role": "user", "content": "Hello"}])
             elif api_name == "tavily":
                 return True  # Assuming valid if provided
             else:
@@ -60,7 +64,8 @@ class Config:
             logger.warning(f"Error validating API key for {api_name}: {type(e).__name__} - {str(e)}")
             return False
 
-    def load_model_data(self, file_path: str = 'models.json'):
+    def load_model_data(self, file_path: str = 'models.json') -> Dict[str, Any]:
+        """Load model data from a JSON file."""
         try:
             with open(file_path, 'r') as file:
                 model_data = json.load(file)
@@ -73,20 +78,23 @@ class Config:
             logger.error(f"Invalid JSON format in model data file: {file_path}")
             return {}
 
-    def get_available_model(self, model_type: str, provider: str):
+    def get_available_model(self, model_type: str, provider: str) -> str:
+        """Get an available model for the given type and provider."""
         if model_type in self.model_data and provider in self.model_data[model_type]:
             available_models = self.model_data[model_type][provider]
             if available_models:
                 return next(iter(available_models))  # Return the first available model
         return None
 
-    def get_model(self, model_type: str, provider: str, model_name: str):
+    def get_model(self, model_type: str, provider: str, model_name: str) -> Dict[str, Any]:
+        """Get model data for a specific model."""
         try:
             return self.model_data[model_type][provider][model_name]
         except KeyError:
             raise ValueError(f"Model not found: {model_type} - {provider} - {model_name}")
 
-    def list_models(self, model_type: str = None, provider: str = None):
+    def list_models(self, model_type: str = None, provider: str = None) -> Dict[str, Any]:
+        """List available models, optionally filtered by type and provider."""
         if model_type and provider:
             return self.model_data.get(model_type, {}).get(provider, {})
         elif model_type:
@@ -94,10 +102,12 @@ class Config:
         else:
             return self.model_data
 
-    def masked_api_keys(self):
+    def masked_api_keys(self) -> Dict[str, str]:
+        """Return a masked version of the API keys for logging purposes."""
         return {k: (v[:5] + '*****') if v else None for k, v in self.api_keys.items()}
 
-    def masked_valid_apis(self):
+    def masked_valid_apis(self) -> Dict[str, str]:
+        """Return a masked version of the valid API keys for logging purposes."""
         return {k: (v[:5] + '*****') if v else None for k, v in self.valid_apis.items()}
 
 # Initialize configuration
@@ -105,15 +115,18 @@ config = Config()
 
 class AIModelSelector:
     @staticmethod
-    def get_available_model(model_type: str, provider: str):
+    def get_available_model(model_type: str, provider: str) -> str:
+        """Get an available model for the given type and provider."""
         return config.get_available_model(model_type, provider)
 
     @staticmethod
-    def get_model(model_type: str, provider: str, model_name: str):
+    def get_model(model_type: str, provider: str, model_name: str) -> Dict[str, Any]:
+        """Get model data for a specific model."""
         return config.get_model(model_type, provider, model_name)
 
     @staticmethod
-    def list_models(model_type: str = None, provider: str = None):
+    def list_models(model_type: str = None, provider: str = None) -> Dict[str, Any]:
+        """List available models, optionally filtered by type and provider."""
         return config.list_models(model_type, provider)
 
 # Constants from the config file

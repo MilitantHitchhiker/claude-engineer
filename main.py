@@ -1,11 +1,11 @@
 """
-Claude-3.5-Sonnet Engineer Chat with Image Support
+Prometheus AI Assistant
 
-This script implements an interactive chat interface with the Claude-3.5-Sonnet AI model,
+This script implements an interactive chat interface with various LLM AI models including OpenAI, Anthropic, and Groq,
 providing capabilities for software development assistance, image analysis, and autonomous mode operation.
 
 Key features:
-- Interactive chat with Claude-3.5-Sonnet
+- Interactive chat with LLM AI models
 - File and folder operations
 - Image processing and analysis
 - Web search functionality
@@ -17,23 +17,23 @@ Run this script to start the chat interface. Follow the on-screen instructions f
 
 Note: Ensure all required modules are installed and API keys are properly set in environment variables before running.
 """
-
 import os
 from datetime import datetime
 from colorama import init, Style
 from typing import List, Dict, Any, Tuple
 from config import Config, AIModelSelector, MAX_CONTINUATION_ITERATIONS, MAX_CONTINUATION_TOKENS, CONTINUATION_EXIT_PHRASE, USER_COLOR, CLAUDE_COLOR, TOOL_COLOR, RESULT_COLOR
 from ai_clients import AIClientFactory
-from token_tracking import count_tokens, update_token_usage, get_token_usage, display_token_usage
+from token_tracking import count_tokens, update_token_usage, get_token_usage, display_token_usage, reset_token_usage
 from file_operations import read_file, write_to_file, list_files, create_folder, create_file
 from image_processing import encode_image_to_base64
-from tools import tools, execute_tool
+from tools import tools, execute_tool_calls
 from tavily import TavilyClient
+from qdrant_integration import QdrantSwarm
 
 # Initialize colorama
 init(autoreset=True)
 
-# Initialise configuration
+# Initialize configuration
 config = Config()
 
 # Global variables
@@ -42,9 +42,10 @@ conversation_history = []
 default_model = None
 clients = {}
 tavily_client = None
+qdrant_swarm = None
 
 # System prompt
-system_prompt: str = """
+system_prompt = """
 You are Claude, an AI assistant powered by Anthropic's Claude-3.5-Sonnet model. You are an exceptional software developer with vast knowledge across multiple programming languages, frameworks, and best practices. Your capabilities include:
 
 1. Creating project structures, including folders and files
@@ -60,29 +61,6 @@ You are Claude, an AI assistant powered by Anthropic's Claude-3.5-Sonnet model. 
 11. Analyzing images provided by the user
 When an image is provided, carefully analyze its contents and incorporate your observations into your responses.
 
-When asked to create a project:
-- Always start by creating a root folder for the project.
-- Then, create the necessary subdirectories and files within that root folder.
-- Organize the project structure logically and follow best practices for the specific type of project being created.
-- Use the provided tools to create folders and files as needed.
-
-When asked to make edits or improvements:
-- Use the read_file tool to examine the contents of existing files.
-- Analyze the code and suggest improvements or make necessary edits.
-- Use the write_to_file tool to implement changes, providing the full updated file content.
-
-Be sure to consider the type of project (e.g., Python, JavaScript, web application) when determining the appropriate structure and files to include.
-
-You can now read files, list the contents of the root folder where this script is being run, and perform web searches. Use these capabilities when:
-- The user asks for edits or improvements to existing files
-- You need to understand the current state of the project
-- You believe reading a file or listing directory contents will be beneficial to accomplish the user's goal
-- You need up-to-date information or additional context to answer a question accurately
-
-When you need current information or feel that a search could provide a better answer, use the tavily_search tool. This tool performs a web search and returns a concise answer along with relevant sources.
-
-Always strive to provide the most accurate, helpful, and detailed responses possible. If you're unsure about something, admit it and consider using the search tool to find the most current information.
-
 {automode_status}
 
 When in automode:
@@ -92,7 +70,6 @@ When in automode:
 4. ALWAYS READ A FILE BEFORE EDITING IT IF YOU ARE MISSING CONTENT. Provide regular updates on your progress
 5. IMPORTANT RULE!! When you know your goals are completed, DO NOT CONTINUE IN POINTLESS BACK AND FORTH CONVERSATIONS with yourself, if you think we achieved the results established to the original request say "AUTOMODE_COMPLETE" in your response to exit the loop!
 6. ULTRA IMPORTANT! You have access to this {iteration_info} amount of iterations you have left to complete the request, you can use this information to make decisions and to provide updates on your progress knowing the amount of responses you have left to complete the request.
-Answer the user's request using relevant tools (if they are available). Before calling a tool, do some analysis within <thinking></thinking> tags. First, think about which of the provided tools is the relevant tool to answer the user's request. Second, go through each of the required parameters of the relevant tool and determine if the user has directly provided or given enough information to infer a value. When deciding if the parameter can be inferred, carefully consider all the context to see if it supports a specific value. If all of the required parameters are present or can be reasonably inferred, close the thinking tag and proceed with the tool call. BUT, if one of the values for a required parameter is missing, DO NOT invoke the function (not even with fillers for the missing params) and instead, ask the user to provide the missing parameters. DO NOT ask for more information on optional parameters if it is not provided.
 """
 
 def handle_error(error_message: str, error: Exception = None):
@@ -125,13 +102,22 @@ def update_system_prompt(current_iteration: int = None, max_iterations: int = No
 
 def chat_with_claude(user_input: str, image_path: str = None, current_iteration: int = None, max_iterations: int = None) -> Tuple[str, bool]:
     """Process user input and generate a response using the selected AI model."""
-    global conversation_history, automode, default_model, clients
+    global conversation_history, automode, default_model, clients, qdrant_swarm
     
     input_tokens = count_tokens(user_input)
     current_system_prompt = update_system_prompt(current_iteration, max_iterations)
     system_prompt_tokens = count_tokens(current_system_prompt)
     
     messages = [msg for msg in conversation_history if msg['role'] != 'system']
+    
+    # Retrieve relevant context from Qdrant
+    if qdrant_swarm:
+        try:
+            relevant_context = qdrant_swarm.search(user_input, top_k=3)
+            context_message = "Relevant context:\n" + "\n".join([f"- {r['text']}" for r in relevant_context])
+            messages.append({"role": "system", "content": context_message})
+        except Exception as e:
+            print_colored(f"Warning: Failed to retrieve context from Qdrant. Error: {str(e)}", TOOL_COLOR)
     
     if image_path:
         print_colored(f"Processing image at path: {image_path}", TOOL_COLOR)
@@ -184,31 +170,22 @@ def chat_with_claude(user_input: str, image_path: str = None, current_iteration:
         # Prepare common parameters
         common_params = {
             "model": model_name,
-            "messages": [{"role": "system", "content": current_system_prompt}] + messages,
+            "system": current_system_prompt,
+            "messages": messages,
+            "functions": tools,
+            "function_call": "auto"
         }
         
-        # Add provider-specific parameters and make API call
-        if provider == "groq":
-            response = client.chat.completions.create(**common_params)
-        elif provider == "openai":
-            response = client.ChatCompletion.create(**common_params)
-        elif provider == "anthropic":
-            common_params.update({
-                "max_tokens": model_data['max_tokens'],
-                "tools": tools,
-                "tool_choice": {"type": "auto"}
-            })
-            response = client.messages.create(**common_params)
-        else:
-            raise ValueError(f"Unsupported provider: {provider}")
+        # Make API call
+        response = client.create_message(**common_params)
         
         # Process the response based on the provider
         assistant_response = ""
         exit_continuation = False
         
         if provider in ["groq", "openai"]:
-            assistant_response = response.choices[0].message.content
-            output_tokens = response.usage.completion_tokens
+            assistant_response = response['choices'][0]['message']['content']
+            output_tokens = response['usage']['completion_tokens']
             if CONTINUATION_EXIT_PHRASE in assistant_response:
                 exit_continuation = True
         elif provider == "anthropic":
@@ -218,45 +195,22 @@ def chat_with_claude(user_input: str, image_path: str = None, current_iteration:
                     print_colored(f"\nClaude: {content_block.text}", CLAUDE_COLOR)
                     if CONTINUATION_EXIT_PHRASE in content_block.text:
                         exit_continuation = True
-                elif content_block.type == "tool_use":
-                    tool_name = content_block.name
-                    tool_input = content_block.input
-                    tool_use_id = content_block.id
+                elif content_block.type == "tool_calls":
+                    tool_calls = content_block.tool_calls
+                    print_colored(f"\nTool Calls: {tool_calls}", TOOL_COLOR)
                     
-                    print_colored(f"\nTool Used: {tool_name}", TOOL_COLOR)
-                    print_colored(f"Tool Input: {tool_input}", TOOL_COLOR)
+                    tool_results = execute_tool_calls(tool_calls)
+                    print_colored(f"Tool Results: {tool_results}", RESULT_COLOR)
                     
-                    result = execute_tool(tool_name, tool_input)
-                    print_colored(f"Tool Result: {result}", RESULT_COLOR)
+                    messages.extend(tool_results)
                     
-                    messages.append({"role": "assistant", "content": [content_block]})
-                    messages.append({
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": tool_use_id,
-                                "content": result
-                            }
-                        ]
-                    })
+                    # Make a follow-up API call with tool results
+                    follow_up_response = client.create_message(**common_params)
                     
-                    try:
-                        tool_response = client.messages.create(**common_params)
-                        
-                        for tool_content_block in tool_response.content:
-                            if tool_content_block.type == "text":
-                                assistant_response += tool_content_block.text
-                                print_colored(f"\nClaude: {tool_content_block.text}", CLAUDE_COLOR)
-                        
-                        tool_input_tokens = count_tokens(result)
-                        tool_output_tokens = client.get_output_tokens(tool_response)
-                        tool_total_tokens = tool_input_tokens + tool_output_tokens + system_prompt_tokens + history_tokens
-                        update_token_usage(tool_input_tokens, tool_output_tokens, tool_total_tokens, system_prompt_tokens, history_tokens)
-                        
-                    except Exception as e:
-                        print_colored(f"Error in tool response: {str(e)}", TOOL_COLOR)
-                        assistant_response += "\nI encountered an error while processing the tool result. Please try again."
+                    for follow_up_content in follow_up_response.content:
+                        if follow_up_content.type == "text":
+                            assistant_response += follow_up_content.text
+                            print_colored(f"\nClaude: {follow_up_content.text}", CLAUDE_COLOR)
             
             output_tokens = response.usage.output_tokens
         
@@ -264,11 +218,11 @@ def chat_with_claude(user_input: str, image_path: str = None, current_iteration:
         error_msg = f"Error calling AI API: {type(e).__name__} - {str(e)}"
         print_colored(error_msg, TOOL_COLOR)
         total_tokens = input_tokens + system_prompt_tokens + history_tokens
-        update_token_usage(input_tokens, 0, total_tokens, system_prompt_tokens, history_tokens)
+        update_token_usage(input_tokens, 0, total_tokens, system_prompt_tokens, history_tokens, provider)
         return f"I'm sorry, there was an error communicating with the AI: {str(e)}. Please try again or check the configuration.", False
     
     total_tokens = input_tokens + output_tokens + system_prompt_tokens + history_tokens
-    update_token_usage(input_tokens, output_tokens, total_tokens, system_prompt_tokens, history_tokens)
+    update_token_usage(input_tokens, output_tokens, total_tokens, system_prompt_tokens, history_tokens, provider)
     
     if assistant_response:
         messages.append({
@@ -278,8 +232,14 @@ def chat_with_claude(user_input: str, image_path: str = None, current_iteration:
     
     conversation_history = messages
     
+    # Add the user input and response to Qdrant for future context
+    if qdrant_swarm:
+        try:
+            qdrant_swarm.add_texts([user_input, assistant_response])
+        except Exception as e:
+            print_colored(f"Warning: Failed to add context to Qdrant. Error: {str(e)}", TOOL_COLOR)
+    
     return assistant_response, exit_continuation
-
 
 def process_and_display_response(response: str) -> None:
     """Process and display the AI's response, handling code blocks and regular text."""
@@ -360,7 +320,7 @@ def change_model():
 
 def main():
     """Main function to run the Claude Engineer chat application."""
-    global automode, conversation_history, default_model
+    global automode, conversation_history, default_model, qdrant_swarm
     print_colored("Welcome to the Claude Engineer Chat with Image Support!", CLAUDE_COLOR)
     print_colored("Type 'exit' to end the conversation.", CLAUDE_COLOR)
     print_colored("Type 'image' to include an image in your message.", CLAUDE_COLOR)
@@ -493,6 +453,14 @@ if __name__ == "__main__":
 
         if tavily_client is None:
             print("Warning: Tavily client not initialized. Web search functionality will be unavailable.")
+
+        # Initialize Qdrant
+        try:
+            qdrant_swarm = QdrantSwarm("claude_engineer_context")
+            print("Qdrant initialized successfully.")
+        except Exception as e:
+            print(f"Warning: Failed to initialize Qdrant. Error: {str(e)}")
+            qdrant_swarm = None
 
         # Dynamically select the default model
         default_model = None

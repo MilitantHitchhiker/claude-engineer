@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
+from typing import List, Dict
 
 class Model:
-    def __init__(self, name, provider, data):
+    def __init__(self, name: str, provider: str, data: Dict[str, object]):
         self.name = name
         self.provider = provider
         self.max_tokens = data['max_tokens']
@@ -12,9 +13,15 @@ class Model:
 
 class AIClient(ABC):
     @abstractmethod
-    def create_message(self, model, system, messages, tools=None, tool_choice=None):
+    def create_message(self, model: str, system: str, messages: List[Dict[str, str]], 
+                       functions: List[Dict[str, object]] | None = None, 
+                       function_call: str | None = None) -> object:
         pass
 
     @abstractmethod
-    def get_output_tokens(self, response):
+    def get_output_tokens(self, response: object) -> int:
+        pass
+
+    @abstractmethod
+    def execute_tool_calls(self, tool_calls: List[Dict[str, object]]) -> List[Dict[str, object]]:
         pass

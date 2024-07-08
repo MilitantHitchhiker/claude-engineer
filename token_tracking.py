@@ -1,10 +1,5 @@
-"""
-This module handles token tracking and usage statistics for the Claude chat application.
-It provides functions for counting tokens, updating usage statistics, and generating token usage information.
-"""
-
 import tiktoken
-from typing import Dict, Any
+from typing import Dict
 
 # Initialize the tokenizer
 try:
@@ -14,7 +9,7 @@ except KeyError:
     tokenizer = tiktoken.get_encoding("p50k_base")
 
 # Global variable to store token usage
-token_usage: Dict[str, Any] = {
+token_usage: Dict[str, object] = {
     "total_tokens": 0,
     "conversation_tokens": []
 }
@@ -31,7 +26,7 @@ def count_tokens(text: str) -> int:
     """
     return len(tokenizer.encode(text))
 
-def update_token_usage(input_tokens: int, output_tokens: int, total_tokens: int, system_tokens: int, history_tokens: int) -> None:
+def update_token_usage(input_tokens: int, output_tokens: int, total_tokens: int, system_tokens: int, history_tokens: int, provider: str) -> None:
     """
     Update the global token usage statistics with the latest interaction's token counts.
 
@@ -41,6 +36,7 @@ def update_token_usage(input_tokens: int, output_tokens: int, total_tokens: int,
         total_tokens (int): Total number of tokens in the interaction.
         system_tokens (int): Number of tokens in the system prompt.
         history_tokens (int): Number of tokens in the conversation history.
+        provider (str): The AI provider used for this interaction.
     """
     global token_usage
     token_usage["total_tokens"] += total_tokens
@@ -49,10 +45,11 @@ def update_token_usage(input_tokens: int, output_tokens: int, total_tokens: int,
         "output_tokens": output_tokens,
         "system_tokens": system_tokens,
         "history_tokens": history_tokens,
-        "total_tokens": total_tokens
+        "total_tokens": total_tokens,
+        "provider": provider
     })
 
-def get_token_usage() -> Dict[str, Any]:
+def get_token_usage() -> Dict[str, object]:
     """
     Retrieve the current token usage statistics.
 
@@ -73,7 +70,8 @@ def get_token_usage() -> Dict[str, Any]:
             "output_tokens": 0,
             "system_tokens": 0,
             "history_tokens": 0,
-            "total_tokens": 0
+            "total_tokens": 0,
+            "provider": "N/A"
         }
         average_tokens = 0
 
@@ -84,26 +82,53 @@ def get_token_usage() -> Dict[str, Any]:
         "conversation_tokens": conversation_tokens
     }
 
-def display_token_usage(usage, is_summary=False):
+def display_token_usage(usage: Dict[str, object], is_summary: bool = False) -> str:
+    """
+    Generate a display string for token usage statistics.
+
+    Args:
+        usage (Dict[str, object]): Token usage statistics.
+        is_summary (bool): Whether to display a summary or detailed view.
+
+    Returns:
+        str: Formatted string displaying token usage statistics.
+    """
     display = ""
     if is_summary:
         display += "Token Usage Summary:\n"
         display += f"Total Conversations: {len(usage.get('conversation_tokens', []))}\n"
         display += f"Total Tokens Used: {usage.get('total_tokens', 0)}\n"
+        
+        # Add provider-specific summary
+        provider_summary = {}
+        for conv in usage.get('conversation_tokens', []):
+            provider = conv['provider']
+            if provider not in provider_summary:
+                provider_summary[provider] = 0
+            provider_summary[provider] += conv['total_tokens']
+        
+        display += "Tokens Used by Provider:\n"
+        for provider, tokens in provider_summary.items():
+            display += f"  {provider}: {tokens}\n"
     else:
         display += "Conversation Token Usage:\n"
         display += f"Input Tokens: {usage.get('input_tokens', 0)}\n"
         display += f"Output Tokens: {usage.get('output_tokens', 0)}\n"
         display += f"Total Conversation Tokens: {usage.get('total_tokens', 0)}\n"
+        display += f"Provider: {usage.get('provider', 'N/A')}\n"
         
-        if 'system_prompt_tokens' in usage:
-            display += f"System Prompt Tokens: {usage['system_prompt_tokens']}\n"
+        if 'system_tokens' in usage:
+            display += f"System Prompt Tokens: {usage['system_tokens']}\n"
         
-        if 'conversation_history_tokens' in usage:
-            display += f"Conversation History Tokens: {usage['conversation_history_tokens']}\n"
-        
-        if 'last_message' in usage:
-            last_message = usage['last_message']
-            display += f"\nLast Message:\n{last_message}\n"
+        if 'history_tokens' in usage:
+            display += f"Conversation History Tokens: {usage['history_tokens']}\n"
     
     return display
+
+def reset_token_usage() -> None:
+    """Reset the token usage statistics."""
+    global token_usage
+    token_usage = {
+        "total_tokens": 0,
+        "conversation_tokens": []
+    }

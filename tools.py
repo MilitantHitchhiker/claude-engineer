@@ -1,8 +1,8 @@
-# Tools.py
-
 from file_operations import create_folder, create_file, write_to_file, read_file, list_files
 from tavily import TavilyClient
 from config import config  # Import the config instance
+from typing import Dict, Any, List
+import json
 
 # Initialize the Tavily client using the API key from the config instance
 tavily_client = TavilyClient(api_key=config.api_keys.get('tavily'))
@@ -11,7 +11,7 @@ tools = [
     {
         "name": "create_folder",
         "description": "Create a new folder at the specified path. Use this when you need to create a new directory in the project structure.",
-        "input_schema": {
+        "parameters": {
             "type": "object",
             "properties": {
                 "path": {
@@ -25,7 +25,7 @@ tools = [
     {
         "name": "create_file",
         "description": "Create a new file at the specified path with optional content. Use this when you need to create a new file in the project structure.",
-        "input_schema": {
+        "parameters": {
             "type": "object",
             "properties": {
                 "path": {
@@ -43,7 +43,7 @@ tools = [
     {
         "name": "write_to_file",
         "description": "Write content to a file at the specified path. If the file exists, only the necessary changes will be applied. If the file doesn't exist, it will be created. Always provide the full intended content of the file.",
-        "input_schema": {
+        "parameters": {
             "type": "object",
             "properties": {
                 "path": {
@@ -61,7 +61,7 @@ tools = [
     {
         "name": "read_file",
         "description": "Read the contents of a file at the specified path. Use this when you need to examine the contents of an existing file.",
-        "input_schema": {
+        "parameters": {
             "type": "object",
             "properties": {
                 "path": {
@@ -75,7 +75,7 @@ tools = [
     {
         "name": "list_files",
         "description": "List all files and directories in the root folder where the script is running. Use this when you need to see the contents of the current directory.",
-        "input_schema": {
+        "parameters": {
             "type": "object",
             "properties": {
                 "path": {
@@ -88,7 +88,7 @@ tools = [
     {
         "name": "tavily_search",
         "description": "Perform a web search using Tavily API to get up-to-date information or additional context. Use this when you need current information or feel a search could provide a better answer.",
-        "input_schema": {
+        "parameters": {
             "type": "object",
             "properties": {
                 "query": {
@@ -101,7 +101,7 @@ tools = [
     }
 ]
 
-def execute_tool(tool_name: str, tool_input: dict) -> str:
+def execute_tool(tool_name: str, tool_input: Dict[str, Any]) -> str:
     try:
         if tool_name == "create_folder":
             return create_folder(tool_input["path"])
@@ -123,6 +123,19 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
 def tavily_search(query: str) -> str:
     try:
         response = tavily_client.qna_search(query=query, search_depth="advanced")
-        return response
+        return json.dumps(response)
     except Exception as e:
         return f"Error performing search: {str(e)}"
+
+def execute_tool_calls(tool_calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    results = []
+    for tool_call in tool_calls:
+        tool_name = tool_call['function']['name']
+        tool_arguments = json.loads(tool_call['function']['arguments'])
+        result = execute_tool(tool_name, tool_arguments)
+        results.append({
+            "tool_call_id": tool_call['id'],
+            "role": "tool",
+            "name": tool_name,
+            "content": result
+        })
