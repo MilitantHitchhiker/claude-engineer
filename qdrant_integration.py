@@ -2,18 +2,30 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct, Filter
 from sentence_transformers import SentenceTransformer
 from typing import List, Dict
-import numpy as np
+
 
 class QdrantSwarm:
-    def __init__(self, collection_name: str, vector_size: int = 768):
+    """
+    A class to interact with Qdrant vector database for storing and retrieving text embeddings.
+    """
+
+    def __init__(self, collection_name: str):
+        """
+        Initialize the QdrantSwarm instance.
+
+        Args:
+            collection_name (str): Name of the Qdrant collection to use.
+        """
         self.client = QdrantClient("localhost", port=6333)
         self.collection_name = collection_name
-        self.vector_size = vector_size
         self.model = SentenceTransformer('all-MiniLM-L6-v2')
+        self.vector_size = self.model.get_sentence_embedding_dimension()
         self._create_collection()
 
     def _create_collection(self):
-        """Create a new collection if it doesn't exist."""
+        """
+        Create a new collection in Qdrant if it doesn't already exist.
+        """
         collections = self.client.get_collections().collections
         if self.collection_name not in [c.name for c in collections]:
             self.client.create_collection(
@@ -21,23 +33,32 @@ class QdrantSwarm:
                 vectors_config=VectorParams(size=self.vector_size, distance=Distance.COSINE),
             )
 
-    def add_texts(self, texts: List[str], metadata: List[Dict] = None):
+    def encode_text(self, text: str) -> List[float]:
         """
-        Add texts to the vector database.
+        Encode the input text into a vector embedding.
 
         Args:
-            texts (List[str]): List of texts to add to the database.
-            metadata (List[Dict], optional): List of metadata dictionaries corresponding to each text.
+            text (str): The text to encode.
 
         Returns:
-            None
+            List[float]: The vector embedding of the input text.
         """
-        vectors = self.model.encode(texts)
+        return self.model.encode(text).tolist()
+
+    def add_texts(self, texts: List[str], metadata: List[Dict] = None):
+        """
+        Add multiple texts and their metadata to the Qdrant collection.
+
+        Args:
+            texts (List[str]): List of texts to add.
+            metadata (List[Dict], optional): List of metadata dictionaries corresponding to each text.
+        """
+        vectors = [self.encode_text(text) for text in texts]
         points = []
         for i, (text, vector) in enumerate(zip(texts, vectors)):
             point = PointStruct(
                 id=i,
-                vector=vector.tolist(),
+                vector=vector,
                 payload={"text": text, **(metadata[i] if metadata else {})}
             )
             points.append(point)
@@ -45,7 +66,7 @@ class QdrantSwarm:
 
     def search(self, query: str, top_k: int = 5) -> List[Dict]:
         """
-        Search for similar texts in the vector database.
+        Search for similar texts in the Qdrant collection.
 
         Args:
             query (str): The query text to search for.
@@ -54,10 +75,10 @@ class QdrantSwarm:
         Returns:
             List[Dict]: A list of dictionaries containing the search results.
         """
-        query_vector = self.model.encode(query)
+        query_vector = self.encode_text(query)
         results = self.client.search(
             collection_name=self.collection_name,
-            query_vector=query_vector.tolist(),
+            query_vector=query_vector,
             limit=top_k
         )
         return [{"text": r.payload["text"], "score": r.score, **r.payload} for r in results]

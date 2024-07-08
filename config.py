@@ -47,7 +47,11 @@ class Config:
         try:
             if api_name == "anthropic":
                 client = Anthropic(api_key=api_key)
-                client.completions.create(prompt="Test", model="claude-3-sonnet-20240229", max_tokens_to_sample=1)
+                client.messages.create(
+                    model="claude-3-sonnet-20240229",
+                    max_tokens=1,
+                    messages=[{"role": "user", "content": "Hello"}]
+                )
             elif api_name == "openai":
                 openai.api_key = api_key
                 openai.Model.list()
