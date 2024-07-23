@@ -3,13 +3,14 @@ from config import Config
 from anthropic import Anthropic
 import openai
 from groq import Groq
-from typing import List, Dict
+from typing import List, Dict, Any
 import json
+from tools import execute_tool_calls as execute_tool
 
 # Initialize Config
 config = Config()
 
-class AnthropicClient:
+class AnthropicClient(AIClient):
     """
     A client for interacting with the Anthropic API.
     """
@@ -39,6 +40,7 @@ class AnthropicClient:
         Returns:
             object: The API response object.
         """
+        # Get model data
         model_data = config.get_model("text_models", "anthropic", model)
         
         # Prepare the messages
@@ -47,8 +49,9 @@ class AnthropicClient:
         # Prepare the API call parameters
         params = {
             "model": model,
-            "max_tokens": model_data['max_tokens'],
             "messages": formatted_messages,
+            "max_tokens": model_data['max_tokens'],
+            "temperature": model_data['temperature'],
         }
         
         # Add functions if provided
@@ -57,24 +60,20 @@ class AnthropicClient:
             if function_call:
                 params["tool_choice"] = {"type": "function", "function": {"name": function_call}}
 
+        # Make the initial API call
         response = self.client.messages.create(**params)
 
-        # Handle tool calls if present in the response
-        if hasattr(response, 'content') and any(c.type == 'tool_calls' for c in response.content):
-            tool_calls = next(c.tool_calls for c in response.content if c.type == 'tool_calls')
+        # Extract tool calls from the response
+        tool_calls = []
+        for content_block in response.content:
+            if content_block.type == "tool_calls":
+                tool_calls.extend(content_block.tool_calls)
+        
+        # Execute tool calls if present
+        if tool_calls:
             tool_results = self.execute_tool_calls(tool_calls)
-            
+            formatted_messages.extend(tool_results)
             # Make a follow-up API call with tool results
-            formatted_messages.append({
-                "role": "assistant",
-                "content": None,
-                "tool_calls": tool_calls
-            })
-            formatted_messages.append({
-                "role": "tool",
-                "content": json.dumps(tool_results)
-            })
-            
             response = self.client.messages.create(**params)
 
         return response
@@ -101,18 +100,50 @@ class AnthropicClient:
         Returns:
             List[Dict[str, object]]: The results of the tool calls.
         """
-        # This method should be implemented to execute the tool calls
-        # It could involve calling external APIs, databases, or other functions
-        # For now, we'll return a placeholder result
-        return [{"result": f"Executed {tool_call.function.name}"} for tool_call in tool_calls]
+        results = []
+        for tool_call in tool_calls:
+            tool_name = tool_call.function.name
+            tool_arguments = json.loads(tool_call.function.arguments)
+            result = execute_tool(tool_name, tool_arguments)
+            results.append({
+                "tool_call_id": tool_call.id,
+                "role": "tool",
+                "name": tool_name,
+                "content": result
+            })
+        return results
 
 class OpenAIClient(AIClient):
+    """
+    A client for interacting with the OpenAI API.
+    """
+
     def __init__(self, api_key: str):
-        openai.api_key = api_key
+        """
+        Initialize the OpenAIClient.
+
+        Args:
+            api_key (str): The API key for authenticating with OpenAI.
+        """
+        self.client = openai.OpenAI(api_key=api_key)
 
     def create_message(self, model: str, system: str, messages: List[Dict[str, str]], 
                        functions: List[Dict[str, object]] | None = None, 
                        function_call: str | None = None) -> object:
+        """
+        Create a message using the OpenAI API.
+
+        Args:
+            model (str): The name of the model to use.
+            system (str): The system message to set the context.
+            messages (List[Dict[str, str]]): The conversation history.
+            functions (List[Dict[str, object]], optional): List of available functions.
+            function_call (str, optional): The name of the function to call.
+
+        Returns:
+            object: The API response object.
+        """
+        # Get model data
         model_data = config.get_model("text_models", "openai", model)
         
         # Prepare the messages
@@ -123,52 +154,63 @@ class OpenAIClient(AIClient):
             "model": model,
             "messages": formatted_messages,
             "max_tokens": model_data['max_tokens'],
+            "temperature": model_data['temperature'],
         }
         
         # Add functions if provided
         if functions:
             params["functions"] = functions
             if function_call:
-                params["function_call"] = function_call
+                params["function_call"] = {"name": function_call}
 
-        response = openai.ChatCompletion.create(**params)
+        # Make the initial API call
+        response = self.client.chat.completions.create(**params)
 
-        # Handle function calls if present in the response
-        if 'function_call' in response['choices'][0]['message']:
-            function_call = response['choices'][0]['message']['function_call']
+        # Check for function calls in the response
+        function_call = response.choices[0].message.function_call
+        if function_call:
             function_results = self.execute_tool_calls([function_call])
-            
+            formatted_messages.extend(function_results)
             # Make a follow-up API call with function results
-            formatted_messages.append({
-                "role": "assistant",
-                "content": None,
-                "function_call": function_call
-            })
-            formatted_messages.append({
-                "role": "function",
-                "name": function_call['name'],
-                "content": json.dumps(function_results[0])
-            })
-            
-            response = openai.ChatCompletion.create(**params)
+            response = self.client.chat.completions.create(**params)
 
         return response
 
     def get_output_tokens(self, response: object) -> int:
-        return response['usage']['completion_tokens'] if 'usage' in response else 0
+        """
+        Get the number of output tokens from the API response.
+
+        Args:
+            response (object): The API response object.
+
+        Returns:
+            int: The number of output tokens.
+        """
+        return response.usage.completion_tokens if hasattr(response, 'usage') else 0
 
     def execute_tool_calls(self, tool_calls: List[Dict[str, object]]) -> List[Dict[str, object]]:
-        # This method should be implemented to execute the tool calls
-        # It could involve calling external APIs, databases, or other functions
-        # For now, we'll return a placeholder result
-        return [{"result": f"Executed {tool_call['name']}"} for tool_call in tool_calls]
+        """
+        Execute tool calls based on the API response.
 
-from typing import List, Dict
-from groq import Groq
-import json
-from config import config
+        Args:
+            tool_calls (List[Dict[str, object]]): The tool calls to execute.
 
-class GroqClient:
+        Returns:
+            List[Dict[str, object]]: The results of the tool calls.
+        """
+        results = []
+        for tool_call in tool_calls:
+            tool_name = tool_call.name
+            tool_arguments = json.loads(tool_call.arguments)
+            result = execute_tool(tool_name, tool_arguments)
+            results.append({
+                "role": "function",
+                "name": tool_name,
+                "content": result
+            })
+        return results
+
+class GroqClient(AIClient):
     """
     A client for interacting with the Groq API.
     """
@@ -198,6 +240,7 @@ class GroqClient:
         Returns:
             object: The API response object.
         """
+        # Get model data
         model_data = config.get_model("text_models", "groq", model)
         
         # Prepare messages in the correct format
@@ -208,6 +251,7 @@ class GroqClient:
             "model": model,
             "messages": formatted_messages,
             "max_tokens": model_data['max_tokens'],
+            "temperature": model_data['temperature'],
         }
 
         # Add functions if provided
@@ -216,25 +260,15 @@ class GroqClient:
             if function_call:
                 params["function_call"] = {"name": function_call}
 
+        # Make the initial API call
         response = self.client.chat.completions.create(**params)
 
-        # Handle function calls if present in the response
-        if hasattr(response.choices[0].message, 'function_call') and response.choices[0].message.function_call:
-            function_call = response.choices[0].message.function_call
-            tool_results = self.execute_tool_calls([function_call])
-            
-            # Make a follow-up API call with tool results
-            formatted_messages.append({
-                "role": "assistant",
-                "content": None,
-                "function_call": function_call
-            })
-            formatted_messages.append({
-                "role": "function",
-                "name": function_call.name,
-                "content": json.dumps(tool_results[0])
-            })
-            
+        # Check for function calls in the response
+        function_call = response.choices[0].message.function_call
+        if function_call:
+            function_results = self.execute_tool_calls([function_call])
+            formatted_messages.extend(function_results)
+            # Make a follow-up API call with function results
             response = self.client.chat.completions.create(**params)
 
         return response
@@ -261,16 +295,38 @@ class GroqClient:
         Returns:
             List[Dict[str, object]]: The results of the tool calls.
         """
-        # This method should be implemented to execute the tool calls
-        # It could involve calling external APIs, databases, or other functions
-        # For now, we'll return a placeholder result
-        return [{"result": f"Executed {tool_call['name']}"} for tool_call in tool_calls]
+        results = []
+        for tool_call in tool_calls:
+            tool_name = tool_call.name
+            tool_arguments = json.loads(tool_call.arguments)
+            result = execute_tool(tool_name, tool_arguments)
+            results.append({
+                "role": "function",
+                "name": tool_name,
+                "content": result
+            })
+        return results
 
 class AIClientFactory:
+    """
+    A factory class for creating AI clients based on the provider.
+    """
     _clients = {}
 
     @staticmethod
     def get_client(provider: str) -> AIClient:
+        """
+        Get or create an AI client for the specified provider.
+
+        Args:
+            provider (str): The name of the AI provider.
+
+        Returns:
+            AIClient: An instance of the appropriate AI client.
+
+        Raises:
+            ValueError: If no API key is found for the provider or if the provider is unsupported.
+        """
         if provider not in AIClientFactory._clients:
             api_key = config.valid_apis.get(provider)
             if not api_key:
@@ -289,4 +345,15 @@ class AIClientFactory:
 
     @staticmethod
     def get_model(model_type: str, provider: str, model_name: str) -> Dict[str, object]:
+        """
+        Get the model data for a specific model.
+
+        Args:
+            model_type (str): The type of the model (e.g., "text_models").
+            provider (str): The name of the AI provider.
+            model_name (str): The name of the model.
+
+        Returns:
+            Dict[str, object]: The model data.
+        """
         return config.get_model(model_type, provider, model_name)
