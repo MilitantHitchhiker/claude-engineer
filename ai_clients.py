@@ -25,8 +25,8 @@ class AnthropicClient(AIClient):
         self.client = Anthropic(api_key=api_key)
 
     def create_message(self, model: str, system: str, messages: List[Dict[str, str]], 
-                       functions: List[Dict[str, object]] | None = None, 
-                       function_call: str | None = None) -> object:
+                       functions: List[Dict[str, object]] = None, 
+                       function_call: str = None) -> object:
         """
         Create a message using the Anthropic API.
 
@@ -43,22 +43,28 @@ class AnthropicClient(AIClient):
         # Get model data
         model_data = config.get_model("text_models", "anthropic", model)
         
-        # Prepare the messages
-        formatted_messages = [{"role": "system", "content": system}] + messages
-        
         # Prepare the API call parameters
         params = {
             "model": model,
-            "messages": formatted_messages,
+            "system": system,  # System message as a top-level parameter
+            "messages": messages,
             "max_tokens": model_data['max_tokens'],
             "temperature": model_data['temperature'],
         }
         
         # Add functions if provided
         if functions:
-            params["tools"] = functions
+            tools = []
+            for function in functions:
+                tool = {
+                    "name": function.get("name"),
+                    "description": function.get("description"),
+                    "input_schema": {"type": "object"}
+                }
+                tools.append(tool)
+            params["tools"] = tools
             if function_call:
-                params["tool_choice"] = {"type": "function", "function": {"name": function_call}}
+                params["tool_choice"] = function_call if function_call != "auto" else {"type": "tool", "name": functions[0]["name"]}
 
         # Make the initial API call
         response = self.client.messages.create(**params)
@@ -72,9 +78,17 @@ class AnthropicClient(AIClient):
         # Execute tool calls if present
         if tool_calls:
             tool_results = self.execute_tool_calls(tool_calls)
-            formatted_messages.extend(tool_results)
+            messages.extend(tool_results)
             # Make a follow-up API call with tool results
-            response = self.client.messages.create(**params)
+            response = self.client.messages.create(
+                model=model,
+                system=system,
+                messages=messages,
+                max_tokens=model_data['max_tokens'],
+                temperature=model_data['temperature'],
+                tools=tools,
+                tool_choice={"type": "tool", "name": tool_calls[0]["name"]} if tool_calls else None
+            )
 
         return response
 
@@ -128,8 +142,8 @@ class OpenAIClient(AIClient):
         self.client = openai.OpenAI(api_key=api_key)
 
     def create_message(self, model: str, system: str, messages: List[Dict[str, str]], 
-                       functions: List[Dict[str, object]] | None = None, 
-                       function_call: str | None = None) -> object:
+                       functions: List[Dict[str, object]] = None, 
+                       function_call: str = None) -> object:
         """
         Create a message using the OpenAI API.
 
@@ -146,22 +160,28 @@ class OpenAIClient(AIClient):
         # Get model data
         model_data = config.get_model("text_models", "openai", model)
         
-        # Prepare the messages
-        formatted_messages = [{"role": "system", "content": system}] + messages
-        
         # Prepare the API call parameters
         params = {
             "model": model,
-            "messages": formatted_messages,
+            "system": system,  # System message as a top-level parameter
+            "messages": messages,
             "max_tokens": model_data['max_tokens'],
             "temperature": model_data['temperature'],
         }
         
         # Add functions if provided
         if functions:
-            params["functions"] = functions
+            tools = []
+            for function in functions:
+                tool = {
+                    "name": function.get("name"),
+                    "description": function.get("description"),
+                    "input_schema": {"type": "object"}
+                }
+                tools.append(tool)
+            params["functions"] = tools
             if function_call:
-                params["function_call"] = {"name": function_call}
+                params["function_call"] = function_call if function_call != "auto" else {"type": "tool", "name": functions[0]["name"]}
 
         # Make the initial API call
         response = self.client.chat.completions.create(**params)
@@ -170,9 +190,17 @@ class OpenAIClient(AIClient):
         function_call = response.choices[0].message.function_call
         if function_call:
             function_results = self.execute_tool_calls([function_call])
-            formatted_messages.extend(function_results)
+            messages.extend(function_results)
             # Make a follow-up API call with function results
-            response = self.client.chat.completions.create(**params)
+            response = self.client.chat.completions.create(
+                model=model,
+                system=system,
+                messages=messages,
+                max_tokens=model_data['max_tokens'],
+                temperature=model_data['temperature'],
+                functions=tools,
+                function_call={"type": "tool", "name": function_call.name} if function_call else None
+            )
 
         return response
 
@@ -225,8 +253,8 @@ class GroqClient(AIClient):
         self.client = Groq(api_key=api_key)
 
     def create_message(self, model: str, system: str, messages: List[Dict[str, str]], 
-                       functions: List[Dict[str, object]] | None = None, 
-                       function_call: str | None = None) -> object:
+                       functions: List[Dict[str, object]] = None, 
+                       function_call: str = None) -> object:
         """
         Create a message using the Groq API.
 
@@ -243,22 +271,28 @@ class GroqClient(AIClient):
         # Get model data
         model_data = config.get_model("text_models", "groq", model)
         
-        # Prepare messages in the correct format
-        formatted_messages = [{"role": "system", "content": system}] + messages
-
-        # Prepare API call parameters
+        # Prepare the API call parameters
         params = {
             "model": model,
-            "messages": formatted_messages,
+            "system": system,  # System message as a top-level parameter
+            "messages": messages,
             "max_tokens": model_data['max_tokens'],
             "temperature": model_data['temperature'],
         }
 
         # Add functions if provided
         if functions:
-            params["functions"] = functions
+            tools = []
+            for function in functions:
+                tool = {
+                    "name": function.get("name"),
+                    "description": function.get("description"),
+                    "input_schema": {"type": "object"}
+                }
+                tools.append(tool)
+            params["functions"] = tools
             if function_call:
-                params["function_call"] = {"name": function_call}
+                params["function_call"] = function_call if function_call != "auto" else {"type": "tool", "name": functions[0]["name"]}
 
         # Make the initial API call
         response = self.client.chat.completions.create(**params)
@@ -267,9 +301,17 @@ class GroqClient(AIClient):
         function_call = response.choices[0].message.function_call
         if function_call:
             function_results = self.execute_tool_calls([function_call])
-            formatted_messages.extend(function_results)
+            messages.extend(function_results)
             # Make a follow-up API call with function results
-            response = self.client.chat.completions.create(**params)
+            response = self.client.chat.completions.create(
+                model=model,
+                system=system,
+                messages=messages,
+                max_tokens=model_data['max_tokens'],
+                temperature=model_data['temperature'],
+                functions=tools,
+                function_call={"type": "tool", "name": function_call.name} if function_call else None
+            )
 
         return response
 

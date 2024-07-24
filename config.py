@@ -1,7 +1,9 @@
 import os
+from dotenv import load_dotenv
 import json
-from anthropic import Anthropic
+from anthropic import Anthropic, APIStatusError, APIError
 import openai
+from openai import OpenAIError
 from groq import Groq
 import logging
 from typing import Dict, Any
@@ -13,12 +15,13 @@ logger = logging.getLogger(__name__)
 class Config:
     def __init__(self):
         logger.debug("Initializing Config...")
+        load_dotenv()  # Load environment variables from .env file
         self.api_keys = self.load_api_keys()
         logger.debug(f"Loaded API keys: {self.masked_api_keys()}")
-        self.valid_apis = self.validate_api_keys()
-        logger.debug(f"Validated API keys: {self.masked_valid_apis()}")
         self.model_data = self.load_model_data()
         logger.debug(f"Loaded model data: {self.model_data}")
+        self.valid_apis = self.validate_api_keys()
+        logger.debug(f"Validated API keys: {self.masked_valid_apis()}")
 
     def load_api_keys(self) -> Dict[str, str]:
         """Load API keys from environment variables."""
@@ -47,17 +50,28 @@ class Config:
         try:
             if api_name == "anthropic":
                 client = Anthropic(api_key=api_key)
+                model = self.get_available_model("text_models", "anthropic")
                 client.messages.create(
-                    model="claude-3-sonnet-20240229",
+                    model=model,
                     max_tokens=1,
                     messages=[{"role": "user", "content": "Hello"}]
                 )
             elif api_name == "openai":
-                openai.api_key = api_key
-                openai.Model.list()
+                client = openai.OpenAI(api_key=api_key)
+                model = self.get_available_model("text_models", "openai")
+                client.chat.completions.create(
+                    model=model,
+                    messages=[{"role": "user", "content": "Hello"}],
+                    max_tokens=1
+                )
             elif api_name == "groq":
                 client = Groq(api_key=api_key)
-                client.chat.completions.create(model="mixtral-8x7b-32768", messages=[{"role": "user", "content": "Hello"}])
+                model = self.get_available_model("text_models", "groq")
+                client.chat.completions.create(
+                    model=model,
+                    messages=[{"role": "user", "content": "Hello"}],
+                    max_tokens=1
+                )
             elif api_name == "tavily":
                 return True  # Assuming valid if provided
             else:

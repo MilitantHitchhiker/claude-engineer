@@ -1,7 +1,7 @@
 {
   "text_models": {
     "anthropic": {
-      "claude-3-opus-20240229": {
+      "claude-3-5-sonnet-20240620": {
         "type": "text-generation",
         "capabilities": [
           "conversation",
@@ -9,13 +9,36 @@
           "summarization",
           "translation",
           "code-generation",
-          "analysis"
+          "analysis",
+          "vision",
+          "graduate-level-reasoning",
+          "undergraduate-knowledge",
+          "coding-proficiency",
+          "visual-reasoning",
+          "multilingual"
         ],
         "max_tokens": 4096,
         "context_window": 200000,
-        "temperature": 1.0
+        "temperature": 1.0,
+        "input_cost_per_1m_tokens": 3.00,
+        "output_cost_per_1m_tokens": 15.00,
+        "speed": "2x faster than Claude 3 Opus",
+        "languages": [
+          "English",
+          "German",
+          "Spanish",
+          "French",
+          "and more"
+        ],
+        "availability": [
+          "Anthropic API",
+          "Amazon Bedrock",
+          "Google Cloud Vertex AI",
+          "Claude.ai (free with rate limits)",
+          "Claude iOS app (free with rate limits)"
+        ]
       },
-      "claude-3-sonnet-20240229": {
+      "claude-3-opus-20240229": {
         "type": "text-generation",
         "capabilities": [
           "conversation",
@@ -42,6 +65,37 @@
       }
     },
     "openai": {
+      "gpt-4o-mini": {
+        "type": "text-generation",
+        "capabilities": [
+          "conversation",
+          "text-completion",
+          "code-generation",
+          "analysis",
+          "summarization",
+          "vision",
+          "function-calling",
+          "json-mode",
+          "multimodal-reasoning",
+          "multilingual-understanding"
+        ],
+        "max_tokens": 4096,
+        "context_window": 128000,
+        "temperature": 1.0,
+        "input_cost_per_1m_tokens": 0.15,
+        "output_cost_per_1m_tokens": 0.60,
+        "knowledge_cutoff": "October 2023",
+        "mmlu_score": 82,
+        "availability": [
+          "OpenAI API",
+          "Assistants API",
+          "Batch API"
+        ],
+        "planned_capabilities": [
+          "audio",
+          "video"
+        ]
+      },
       "gpt-4-0125-preview": {
         "type": "text-generation",
         "capabilities": [
@@ -49,20 +103,9 @@
           "text-completion",
           "code-generation",
           "analysis",
-          "summarization"
-        ],
-        "max_tokens": 4096,
-        "context_window": 128000,
-        "temperature": 1.0
-      },
-      "gpt-4-turbo-preview": {
-        "type": "text-generation",
-        "capabilities": [
-          "conversation",
-          "text-completion",
-          "code-generation",
-          "analysis",
-          "summarization"
+          "summarization",
+          "function-calling",
+          "json-mode"
         ],
         "max_tokens": 4096,
         "context_window": 128000,
@@ -74,14 +117,72 @@
           "conversation",
           "text-completion",
           "code-generation",
-          "analysis"
+          "analysis",
+          "function-calling",
+          "json-mode"
         ],
         "max_tokens": 4096,
         "context_window": 16384,
-        "temperature": 1.0
+        "temperature": 1.0,
+        "mmlu_score": 69.8
       }
     },
     "groq": {
+      "llama3-groq-70b-8192-tool-use-preview": {
+        "type": "text-generation",
+        "capabilities": [
+          "conversation",
+          "text-completion",
+          "code-generation",
+          "function-calling",
+          "tool-use"
+        ],
+        "temperature": 1.0,
+        "max_tokens": 8192,
+        "context_window": 8192,
+        "performance": "Highest on Berkeley Function Calling Leaderboard (BFCL)",
+        "training": [
+          "Full fine-tuning",
+          "Direct Preference Optimization (DPO)"
+        ],
+        "license": "Same as original Llama-3 models",
+        "contamination_rate": "Low between training and test data"
+      },
+      "llama3-groq-8b-8192-tool-use-preview": {
+        "type": "text-generation",
+        "capabilities": [
+          "conversation",
+          "text-completion",
+          "code-generation",
+          "function-calling",
+          "tool-use"
+        ],
+        "temperature": 1.0,
+        "max_tokens": 8192,
+        "context_window": 8192,
+        "training": [
+          "Full fine-tuning",
+          "Direct Preference Optimization (DPO)"
+        ],
+        "license": "Same as original Llama-3 models",
+        "contamination_rate": "Low between training and test data"
+      },
+      "llama3-405b": {
+        "type": "text-generation",
+        "capabilities": [
+          "conversation",
+          "text-completion",
+          "code-generation",
+          "function-calling",
+          "web-search",
+          "math",
+          "code-execution"
+        ],
+        "temperature": 1.0,
+        "max_tokens": 32768,
+        "context_window": 32768,
+        "description": "Largest and most capable openly available foundation model"
+      },
       "mixtral-8x7b-32768": {
         "type": "text-generation",
         "capabilities": [
@@ -92,50 +193,6 @@
         "temperature": 1.0,
         "max_tokens": 32768,
         "context_window": 32768
-      },
-      "gemma-7b-it": {
-        "type": "text-generation",
-        "capabilities": [
-          "conversation",
-          "text-completion",
-          "code-generation"
-        ],
-        "temperature": 1.0,
-        "max_tokens": 8192,
-        "context_window": 8192
-      },
-      "llama3-8b-8192": {
-        "type": "text-generation",
-        "capabilities": [
-          "conversation",
-          "text-completion",
-          "code-generation"
-        ],
-        "temperature": 1.0,
-        "max_tokens": 8192,
-        "context_window": 8192
-      },
-      "llama3-70b-8192": {
-        "type": "text-generation",
-        "capabilities": [
-          "conversation",
-          "text-completion",
-          "code-generation"
-        ],
-        "temperature": 1.0,
-        "max_tokens": 8192,
-        "context_window": 8192
-      },
-      "gemma2-9b-it": {
-        "type": "text-generation",
-        "capabilities": [
-          "conversation",
-          "text-completion",
-          "code-generation"
-        ],
-        "temperature": 1.0,
-        "max_tokens": 8192,
-        "context_window": 8192
       }
     }
   },
@@ -210,39 +267,6 @@
         ],
         "quality": ["standard", "hd"],
         "style": ["vivid", "natural"]
-      }
-    },
-    "stability_ai": {
-      "stable-diffusion-xl-1.0": {
-        "type": "image-generation",
-        "capabilities": [
-          "text-to-image",
-          "image-to-image"
-        ],
-        "max_images": 4,
-        "sizes": [
-          "512x512",
-          "768x768",
-          "1024x1024"
-        ],
-        "steps": 50
-      }
-    },
-    "midjourney": {
-      "v6": {
-        "type": "image-generation",
-        "capabilities": [
-          "text-to-image",
-          "image-variation"
-        ],
-        "max_images": 4,
-        "sizes": [
-          "1024x1024",
-          "1792x1024",
-          "1024x1792"
-        ],
-        "quality": ["standard", "hd"],
-        "style": ["raw", "artistic"]
       }
     }
   },
