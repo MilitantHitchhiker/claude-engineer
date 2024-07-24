@@ -172,29 +172,23 @@ def chat_with_claude(user_input: str, image_path: str = None, current_iteration:
             "model": model_name,
             "system": current_system_prompt,
             "messages": messages,
-            "functions": tools,
-            "function_call": "auto"
         }
-        
-        # Make API call
+
+        # Make API call without any tools or functions
         response = client.create_message(**common_params)
-        
-        # Process the response based on the provider
+
+        # Process the response
         assistant_response = ""
         exit_continuation = False
         
-        if provider in ["groq", "openai"]:
-            assistant_response = response['choices'][0]['message']['content']
-            output_tokens = response['usage']['completion_tokens']
-            if CONTINUATION_EXIT_PHRASE in assistant_response:
-                exit_continuation = True
-        elif provider == "anthropic":
+        if provider == "anthropic":
             for content_block in response.content:
                 if content_block.type == "text":
                     assistant_response += content_block.text
                     print_colored(f"\nClaude: {content_block.text}", CLAUDE_COLOR)
                     if CONTINUATION_EXIT_PHRASE in content_block.text:
                         exit_continuation = True
+                # Only process tool calls if they exist in the response
                 elif content_block.type == "tool_calls":
                     tool_calls = content_block.tool_calls
                     print_colored(f"\nTool Calls: {tool_calls}", TOOL_COLOR)
@@ -211,7 +205,7 @@ def chat_with_claude(user_input: str, image_path: str = None, current_iteration:
                         if follow_up_content.type == "text":
                             assistant_response += follow_up_content.text
                             print_colored(f"\nClaude: {follow_up_content.text}", CLAUDE_COLOR)
-            
+                                        
             output_tokens = response.usage.output_tokens
         
     except Exception as e:
@@ -243,7 +237,14 @@ def chat_with_claude(user_input: str, image_path: str = None, current_iteration:
 
 def process_and_display_response(response: str) -> None:
     """Process and display the AI's response, handling code blocks and regular text."""
-    processed_response = process_response(response)
+    if isinstance(response, str):
+        processed_response = process_response(response)
+    elif isinstance(response, dict) and 'content' in response:
+        processed_response = process_response(response['content'])
+    else:
+        print_colored("Unexpected response format", TOOL_COLOR)
+        return
+
     for content_type, content in processed_response:
         if content_type == 'text':
             print_colored(content, CLAUDE_COLOR)
